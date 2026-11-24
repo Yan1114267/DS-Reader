@@ -14,7 +14,9 @@
     temperature: 0.4,
     requestTimeoutMs: 180000,
     chatMaxTokens: 2048,       // 答疑回答的最大 token 数
-    chatTimeoutMs: 180000
+    chatTimeoutMs: 180000,
+    maxOcrImages: 20,          // 每个文件最多识别多少张图片
+    maxOcrPdfPages: 12         // 扫描版 PDF 最多 OCR 多少页
   };
 
   const PRESETS = {
@@ -163,6 +165,9 @@
     model: $('model'),
     apiKey: $('apiKey'),
     rememberKey: $('rememberKey'),
+    visionOcr: $('visionOcr'),
+    visionModel: $('visionModel'),
+    visionModelRow: $('visionModelRow'),
     dropZone: $('dropZone'),
     fileInput: $('fileInput'),
     fileInfo: $('fileInfo'),
@@ -207,6 +212,8 @@
     registry: new Map(),
     lastScroll: null,
     backTimer: 0,
+    ocrCount: 0,
+    ocrWarning: '',
     chatHistory: [],
     chatLang: 'zh',
     chatStreaming: false,
@@ -230,10 +237,17 @@
   }
 
   function bindEvents() {
-    [els.baseUrl, els.model, els.apiKey].forEach((input) => {
+    [els.baseUrl, els.model, els.apiKey, els.visionModel].forEach((input) => {
       input.addEventListener('input', persistSettings);
     });
     els.rememberKey.addEventListener('change', persistSettings);
+    els.visionOcr.addEventListener('change', () => {
+      updateVisionControls();
+      persistSettings();
+      if (els.visionOcr.checked && state.file && !state.busy) {
+        setStatus('OCR 已开启：重新选择一次文件即可识别图片文字。', false);
+      }
+    });
 
     document.querySelectorAll('[data-preset]').forEach((button) => {
       button.addEventListener('click', () => {
@@ -302,6 +316,9 @@
     els.model.value = saved.model || PRESETS.deepseek.model;
     els.rememberKey.checked = Boolean(saved.remember);
     els.apiKey.value = saved.remember ? (saved.apiKey || '') : '';
+    els.visionOcr.checked = Boolean(saved.visionOcr);
+    els.visionModel.value = saved.visionModel || '';
+    updateVisionControls();
   }
 
   function persistSettings() {
@@ -309,7 +326,9 @@
     const data = {
       baseUrl: els.baseUrl.value.trim(),
       model: els.model.value.trim(),
-      remember
+      remember,
+      visionOcr: els.visionOcr.checked,
+      visionModel: els.visionModel.value.trim()
     };
     if (remember) data.apiKey = els.apiKey.value.trim();
     try {
@@ -325,6 +344,20 @@
       model: els.model.value.trim(),
       apiKey: els.apiKey.value.trim()
     };
+  }
+
+  function readVisionConfig() {
+    const settings = readSettings();
+    return {
+      enabled: Boolean(els.visionOcr.checked),
+      baseUrl: settings.baseUrl,
+      apiKey: settings.apiKey,
+      model: els.visionModel.value.trim() || settings.model
+    };
+  }
+
+  function updateVisionControls() {
+    els.visionModelRow.hidden = !els.visionOcr.checked;
   }
 
   function validateSettings(settings) {
@@ -476,36 +509,50 @@
       return;
     }
     const ext = (file.name.split('.').pop() || '').toLowerCase();
-    const supported = ['pdf', 'pptx', 'docx', 'txt', 'md', 'markdown'];
+    const supported = ['pdf', 'pptx', 'docx', 'svg', 'txt', 'md', 'markdown'];
     if (!supported.includes(ext)) {
-      toast('暂不支持 .' + ext + ' 文件，请上传 PDF / PPTX / DOCX / TXT / MD。', 5200);
+      toast('暂不支持 .' + ext + ' 文件，请上传 PDF / PPTX / DOCX / SVG / TXT / MD。', 5200);
       return;
     }
 
     state.file = file;
     state.text = '';
+    state.ocrCount = 0;
+    state.ocrWarning = '';
     state.sourceLabel = file.name;
     els.startBtn.disabled = true;
     showFileCard(file, '正在解析…');
 
     try {
       setStatus('正在解析 ' + ext.toUpperCase() + '…', true);
-      const raw = await extractText(file, ext);
+      const raw = await extractText(file, ext, readVisionConfig());
       const cleaned = cleanText(raw);
       if (!cleaned || cleaned.length < 20) {
-        throw new Error('没有提取到可阅读的文字。如果是扫描版 PDF，需要先做 OCR 哦。');
+        throw new Error('没有提取到可阅读的文字。可以勾选「识别图片里的文字」并使用支持视觉的模型，或先对扫描件做 OCR。');
       }
       state.text = cleaned;
 
       const allChunks = chunkText(cleaned, CONFIG.chunkSize);
       const chunkCount = Math.min(allChunks.length, CONFIG.maxChunks);
       let meta = formatBytes(file.size) + ' · 约 ' + cleaned.length.toLocaleString() + ' 字符 · ' + chunkCount + ' 段备课';
+      if (state.ocrCount) {
+        meta += ' · 图片 OCR ' + state.ocrCount + ' 张';
+      }
+      if (state.ocrWarning) {
+        meta += ' · 部分图片未识别';
+      }
       if (allChunks.length > CONFIG.maxChunks) {
         meta += '（文档较长，本次只讲解前 ' + CONFIG.maxChunks + ' 段）';
       }
       showFileCard(file, meta);
       els.startBtn.disabled = false;
-      setStatus('资料已就绪：可填写课程要求，或直接开始上课 🐳', false);
+      if (state.ocrWarning) {
+        const warning = state.ocrWarning.slice(0, 220);
+        setStatus('资料已就绪，但图片文字识别未完成：' + warning, false, true);
+        toast('图片文字识别未完成：' + warning, 8000);
+      } else {
+        setStatus('资料已就绪：可填写课程要求，或直接开始上课 🐳', false);
+      }
     } catch (err) {
       console.error(err);
       state.file = null;
@@ -536,14 +583,17 @@
       .trim();
   }
 
-  async function extractText(file, ext) {
+  async function extractText(file, ext, vision) {
+    const ocr = vision || { enabled: false, baseUrl: '', apiKey: '', model: '' };
     switch (ext) {
       case 'pdf':
-        return extractPdf(file);
+        return extractPdf(file, ocr);
       case 'pptx':
-        return extractPptx(file);
+        return extractPptx(file, ocr);
       case 'docx':
-        return extractDocx(file);
+        return extractDocx(file, ocr);
+      case 'svg':
+        return extractSvgFile(file);
       case 'txt':
       case 'md':
       case 'markdown':
@@ -551,6 +601,195 @@
       default:
         throw new Error('不支持的文件类型。');
     }
+  }
+
+  /* ---------------- SVG 与图片文字 ---------------- */
+
+  function extractSvgTextFromString(svgSource) {
+    const source = String(svgSource || '').trim();
+    if (!source) return '';
+
+    let doc;
+    try {
+      doc = new DOMParser().parseFromString(source, 'image/svg+xml');
+    } catch (err) {
+      return '';
+    }
+
+    const nodes = [];
+    ['text', 'title', 'desc'].forEach((tag) => {
+      const list = doc.getElementsByTagName(tag);
+      for (const node of list) nodes.push(node);
+    });
+
+    const seen = new Set();
+    const lines = [];
+    for (const node of nodes) {
+      const value = String(node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!value || seen.has(value)) continue;
+      seen.add(value);
+      lines.push(value);
+    }
+
+    if (!lines.length) {
+      const spans = doc.getElementsByTagName('tspan');
+      for (const node of spans) {
+        const value = String(node.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!value || seen.has(value)) continue;
+        seen.add(value);
+        lines.push(value);
+      }
+    }
+    return lines.join('\n');
+  }
+
+  async function extractSvgFile(file) {
+    const text = await file.text();
+    const extracted = extractSvgTextFromString(text);
+    if (!extracted) {
+      throw new Error('这个 SVG 里没有文本层。如果文字已经转成路径，请截图后开启图片文字识别。');
+    }
+    return extracted;
+  }
+
+  function visionConfigProblem(vision) {
+    if (!vision || !vision.enabled) return '图片文字识别未开启。';
+    if (!vision.baseUrl) return '请先填写 API 接口地址。';
+    if (!vision.model) return '请填写视觉模型名称。';
+    const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?/i.test(vision.baseUrl);
+    if (!vision.apiKey && !isLocal) return '请先填写 API Key。';
+    return '';
+  }
+
+  async function blobToOcrDataUrl(blob) {
+    try {
+      const bitmap = await createImageBitmap(blob);
+      const maxDim = 1600;
+      const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      const context = canvas.getContext('2d');
+      context.fillStyle = '#ffffff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close();
+      return canvas.toDataURL('image/jpeg', 0.92);
+    } catch (err) {
+      return '';
+    }
+  }
+
+  async function visionOcrDataUrl(dataUrl, vision) {
+    const url = buildEndpoint(vision.baseUrl);
+    const headers = { 'Content-Type': 'application/json' };
+    if (vision.apiKey) headers.Authorization = 'Bearer ' + vision.apiKey;
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 120000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: vision.model,
+          messages: [
+            {
+              role: 'system',
+              content: '你是一个 OCR 文字识别引擎。请逐字转写图片中所有可见文字，尽量保持原有换行和阅读顺序；不要解释、不要总结、不要添加图片里没有的内容。如果图片中没有可读文字，只输出空字符串。'
+            },
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: '请转写这张图片中的文字。' },
+                { type: 'image_url', image_url: { url: dataUrl } }
+              ]
+            }
+          ],
+          temperature: 0,
+          max_tokens: 1200
+        }),
+        signal: controller.signal
+      });
+
+      if (!response.ok) throw await apiError(response);
+      const data = await response.json();
+      let content = extractMessageContent(
+        data && data.choices && data.choices[0] && data.choices[0].message
+      );
+      content = content.replace(/^```[a-zA-Z]*\s*/, '').replace(/```\s*$/, '').trim();
+      if (/^(no text|no readable text|图片中没有文字|没有文字|无法识别)/i.test(content)) return '';
+      return content;
+    } catch (err) {
+      if (err && err.name === 'AbortError') {
+        throw new Error('图片识别请求超时。');
+      }
+      throw err;
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
+  function imageMimeForName(name) {
+    const ext = (name.split('.').pop() || '').toLowerCase();
+    if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+    if (ext === 'png') return 'image/png';
+    if (ext === 'webp') return 'image/webp';
+    if (ext === 'gif') return 'image/gif';
+    if (ext === 'bmp') return 'image/bmp';
+    return 'application/octet-stream';
+  }
+
+  async function ocrZipImages(zip, fileNames, label, vision) {
+    const parts = [];
+    if (!vision.enabled || !fileNames.length) return parts;
+
+    const problem = visionConfigProblem(vision);
+    if (problem) {
+      state.ocrWarning = problem;
+      return parts;
+    }
+
+    let attempted = 0;
+    const seenText = new Set();
+
+    for (const name of fileNames) {
+      if (attempted >= CONFIG.maxOcrImages) {
+        state.ocrWarning = state.ocrWarning || ('图片较多，只识别了前 ' + CONFIG.maxOcrImages + ' 张。');
+        break;
+      }
+
+      let blob;
+      try {
+        const bytes = await zip.file(name).async('uint8array');
+        if (!bytes || bytes.length < 3000) continue;
+        blob = new Blob([bytes], { type: imageMimeForName(name) });
+      } catch (err) {
+        continue;
+      }
+
+      attempted += 1;
+      setStatus('正在识别' + label + '（' + attempted + '）…', true);
+      const dataUrl = await blobToOcrDataUrl(blob);
+      if (!dataUrl) continue;
+
+      try {
+        const text = await visionOcrDataUrl(dataUrl, vision);
+        const clean = String(text || '').trim();
+        if (!clean) continue;
+        const key = clean.replace(/\s+/g, ' ').trim().toLowerCase();
+        if (seenText.has(key)) continue;
+        seenText.add(key);
+        state.ocrCount += 1;
+        parts.push('[' + label + ' ' + state.ocrCount + ']\n' + clean);
+      } catch (err) {
+        state.ocrWarning = (err && err.message) || '视觉模型调用失败。';
+        break;
+      }
+    }
+
+    return parts;
   }
 
   /* ---------------- PDF ---------------- */
@@ -575,7 +814,29 @@
     return pdfWorkerPromise;
   }
 
-  async function extractPdf(file) {
+  function renderPdfPageToDataUrl(page) {
+    return new Promise((resolve, reject) => {
+      try {
+        const base = page.getViewport({ scale: 1 });
+        const scale = Math.min(2, Math.max(1, 1600 / Math.max(base.width, base.height)));
+        const viewport = page.getViewport({ scale });
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+        const context = canvas.getContext('2d');
+        context.fillStyle = '#ffffff';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        page.render({ canvasContext: context, viewport })
+          .promise
+          .then(() => resolve(canvas.toDataURL('image/jpeg', 0.9)))
+          .catch(reject);
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  async function extractPdf(file, vision) {
     await ensurePdfWorker();
     if (!window.pdfjsLib) {
       throw new Error('PDF 解析库没有加载成功，请检查网络后刷新页面。');
@@ -583,6 +844,9 @@
     const data = new Uint8Array(await file.arrayBuffer());
     const pdf = await pdfjsLib.getDocument({ data }).promise;
     const pages = [];
+    const ocrProblem = vision.enabled ? visionConfigProblem(vision) : '';
+    let ocrPages = 0;
+    let ocrBroken = false;
 
     for (let pageNo = 1; pageNo <= pdf.numPages; pageNo += 1) {
       setStatus('正在读取 PDF 第 ' + pageNo + '/' + pdf.numPages + ' 页…', true);
@@ -594,7 +858,33 @@
         text += item.str;
         text += item.hasEOL ? '\n' : ' ';
       }
-      pages.push(text.trim());
+      let pageText = text.trim();
+
+      if (vision.enabled && !ocrBroken && pageText.length < 30) {
+        if (ocrProblem) {
+          state.ocrWarning = state.ocrWarning || ocrProblem;
+          ocrBroken = true;
+        } else if (ocrPages >= CONFIG.maxOcrPdfPages) {
+          state.ocrWarning = state.ocrWarning || ('扫描页较多，只识别了前 ' + CONFIG.maxOcrPdfPages + ' 页。');
+        } else {
+          ocrPages += 1;
+          setStatus('正在识别 PDF 第 ' + pageNo + ' 页的图片文字…', true);
+          try {
+            const dataUrl = await renderPdfPageToDataUrl(page);
+            const ocrText = String(await visionOcrDataUrl(dataUrl, vision) || '').trim();
+            if (ocrText) {
+              state.ocrCount += 1;
+              pageText = (pageText ? pageText + '\n' : '') +
+                '[PDF 第 ' + pageNo + ' 页图片文字]\n' + ocrText;
+            }
+          } catch (err) {
+            state.ocrWarning = (err && err.message) || 'PDF 图片文字识别失败。';
+            ocrBroken = true;
+          }
+        }
+      }
+
+      pages.push(pageText);
       if (pageNo % 10 === 0) {
         await new Promise((resolve) => window.setTimeout(resolve, 0));
       }
@@ -609,7 +899,7 @@
     return match ? Number(match[1]) : 0;
   }
 
-  async function extractPptx(file) {
+  async function extractPptx(file, vision) {
     if (!window.JSZip) {
       throw new Error('PPTX 解析库没有加载成功，请检查网络后刷新页面。');
     }
@@ -622,6 +912,7 @@
     }
 
     const ns = 'http://schemas.openxmlformats.org/drawingml/2006/main';
+    const pNs = 'http://schemas.openxmlformats.org/presentationml/2006/main';
     const parts = [];
 
     for (let i = 0; i < names.length; i += 1) {
@@ -643,19 +934,87 @@
           if (node.textContent.trim()) lines.push(node.textContent.trim());
         }
       }
+
+      const altTexts = doc.getElementsByTagNameNS(pNs, 'cNvPr');
+      for (const node of altTexts) {
+        const alt = (node.getAttribute('descr') || node.getAttribute('title') || '').trim();
+        if (!alt) continue;
+        const line = '[图片说明] ' + alt;
+        if (!lines.includes(line)) lines.push(line);
+      }
+
       if (lines.length) parts.push('[Slide ' + (i + 1) + ']\n' + lines.join('\n'));
     }
+
+    const mediaNames = Object.keys(zip.files).filter((name) => /^ppt\/media\//i.test(name));
+    const svgNames = mediaNames.filter((name) => /\.svg$/i.test(name));
+    const seenSvg = new Set();
+    for (const name of svgNames) {
+      try {
+        const svgText = extractSvgTextFromString(await zip.file(name).async('string'));
+        if (!svgText || seenSvg.has(svgText)) continue;
+        seenSvg.add(svgText);
+        parts.push('[PPT SVG 图片文字]\n' + svgText);
+      } catch (err) {
+        /* 忽略单个损坏的 SVG */
+      }
+    }
+
+    const rasterNames = mediaNames.filter((name) => /\.(png|jpe?g|webp|bmp|gif)$/i.test(name));
+    const ocrParts = await ocrZipImages(zip, rasterNames, 'PPT 图片文字', vision);
+    if (ocrParts.length) parts.push(...ocrParts);
+
     return parts.join('\n\n');
   }
 
   /* ---------------- DOCX ---------------- */
 
-  async function extractDocx(file) {
+  async function extractDocx(file, vision) {
     if (!window.mammoth) {
       throw new Error('DOCX 解析库没有加载成功，请检查网络后刷新页面。');
     }
-    const result = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
-    return result.value || '';
+    const buffer = await file.arrayBuffer();
+    const result = await mammoth.extractRawText({ arrayBuffer: buffer });
+    const parts = [result.value || ''];
+
+    if (window.JSZip) {
+      try {
+        const zip = await JSZip.loadAsync(buffer);
+        const mediaNames = Object.keys(zip.files).filter((name) => /^word\/media\//i.test(name));
+        const svgNames = mediaNames.filter((name) => /\.svg$/i.test(name));
+        const seenSvg = new Set();
+        for (const name of svgNames) {
+          const svgText = extractSvgTextFromString(await zip.file(name).async('string'));
+          if (!svgText || seenSvg.has(svgText)) continue;
+          seenSvg.add(svgText);
+          parts.push('[Word SVG 图片文字]\n' + svgText);
+        }
+
+        const documentXml = zip.file('word/document.xml');
+        if (documentXml) {
+          const doc = new DOMParser().parseFromString(await documentXml.async('string'), 'application/xml');
+          const docPrs = doc.getElementsByTagNameNS(
+            'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing',
+            'docPr'
+          );
+          const seenAlt = new Set();
+          for (const node of docPrs) {
+            const alt = (node.getAttribute('descr') || node.getAttribute('title') || '').trim();
+            if (!alt || seenAlt.has(alt)) continue;
+            seenAlt.add(alt);
+            parts.push('[图片说明] ' + alt);
+          }
+        }
+
+        const rasterNames = mediaNames.filter((name) => /\.(png|jpe?g|webp|bmp|gif)$/i.test(name));
+        const ocrParts = await ocrZipImages(zip, rasterNames, 'Word 图片文字', vision);
+        if (ocrParts.length) parts.push(...ocrParts);
+      } catch (err) {
+        /* DOCX 媒体提取失败时，仍保留 mammoth 的文字 */
+      }
+    }
+
+    return parts.filter(Boolean).join('\n\n');
   }
 
   /* ---------------- 文本切段 ---------------- */

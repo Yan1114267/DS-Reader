@@ -50,9 +50,18 @@
         <div id="dropZone" class="drop-zone" role="button" tabindex="0" aria-label="上传学习资料">
           <div class="drop-icon">📄</div>
           <div class="drop-main">拖拽文件到这里，或点击选择</div>
-          <div class="drop-sub">PDF · PPTX · DOCX · TXT · MD</div>
-          <input id="fileInput" type="file" accept=".pdf,.pptx,.docx,.txt,.md,.markdown" hidden />
+          <div class="drop-sub">PDF · PPTX · DOCX · SVG · TXT · MD</div>
+          <input id="fileInput" type="file" accept=".pdf,.pptx,.docx,.svg,.txt,.md,.markdown" hidden />
         </div>
+        <label class="check ocr-check">
+          <input id="visionOcr" type="checkbox" />
+          <span>识别图片里的文字（需支持视觉的模型）</span>
+        </label>
+        <label class="field ocr-model-field" id="visionModelRow" hidden>
+          <span>视觉模型名称（留空沿用上方模型）</span>
+          <input id="visionModel" type="text" autocomplete="off" spellcheck="false" placeholder="例如：gpt-4o-mini / qwen-vl-plus" />
+        </label>
+        <p class="hint ocr-hint">SVG 会直接读取文字；PPT / 扫描 PDF 图片会调用视觉模型（共用上方接口与 Key）。请在上传前设置，修改后重新选择文件生效。</p>
         <div id="fileInfo" class="file-info" hidden>
           <div class="file-top">
             <span id="fileBadge" class="file-badge">PDF</span>
@@ -75,12 +84,13 @@
           <div class="welcome-whale">🐳</div>
           <p class="welcome-kicker">WHALE TUTOR · 双语课堂</p>
           <h1>把厚厚的讲义，<br />变成会发光的小课。</h1>
-          <p class="welcome-copy">上传 PDF、PPTX 或 DOCX，大鲸鱼会读完你的资料，为你讲一节清清楚楚的课。</p>
+          <p class="welcome-copy">上传 PDF、PPTX、DOCX 或 SVG，大鲸鱼会读完你的资料，为你讲一节清清楚楚的课。</p>
           <ul class="feature-list">
             <li><span class="feat-ico">🔵</span><span><b>术语自动标注</b> — 学术名词蓝色下划线，悬停即见中文注释。</span></li>
             <li><span class="feat-ico">🧭</span><span><b>点击跳转定义</b> — 后文再次出现的术语，一点就回到首次定义处。</span></li>
             <li><span class="feat-ico">🌏</span><span><b>中英对照</b> — 英文讲解为主体，每段下方都有中文翻译。</span></li>
             <li><span class="feat-ico">🎯</span><span><b>自定义课程格式</b> — 第一次生成前写下要求：分点、表格、考试重点或自测题。</span></li>
+            <li><span class="feat-ico">🖼️</span><span><b>SVG / 图片文字</b> — SVG 直接读取文字；PPT 与扫描 PDF 的图片可通过视觉模型识别。</span></li>
           </ul>
           <div class="welcome-actions">
             <button id="demoBtn" class="ghost-btn" type="button">先看一节演示课 →</button>
