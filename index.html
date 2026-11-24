@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>小肥鱼学伴 · Whale Tutor</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%F0%9F%90%B3%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <header class="brand">
+        <div class="brand-mark">🐳</div>
+        <div>
+          <div class="brand-name">小肥鱼学伴</div>
+          <div class="brand-sub">Whale Tutor · 让讲义开口讲话</div>
+        </div>
+      </header>
+
+      <section class="card">
+        <h2 class="card-title"><span class="step">1</span> 接入 AI</h2>
+        <div class="preset-row" aria-label="服务商预设">
+          <button type="button" class="chip" data-preset="deepseek">DeepSeek</button>
+          <button type="button" class="chip" data-preset="openai">OpenAI</button>
+          <button type="button" class="chip" data-preset="ollama">本地 Ollama</button>
+        </div>
+        <label class="field">
+          <span>接口地址 Base URL</span>
+          <input id="baseUrl" type="text" autocomplete="off" spellcheck="false" placeholder="https://api.deepseek.com/v1" />
+        </label>
+        <label class="field">
+          <span>模型名称</span>
+          <input id="model" type="text" autocomplete="off" spellcheck="false" placeholder="deepseek-chat" />
+        </label>
+        <label class="field">
+          <span>API Key</span>
+          <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-..." />
+        </label>
+        <label class="check">
+          <input id="rememberKey" type="checkbox" />
+          <span>在这台电脑上记住密钥</span>
+        </label>
+        <p class="hint">兼容 OpenAI Chat Completions 协议。密钥只保存在你的浏览器里，文件内容只会发送给你填写的那家服务商。</p>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title"><span class="step">2</span> 上传学习资料</h2>
+        <div id="dropZone" class="drop-zone" role="button" tabindex="0" aria-label="上传学习资料">
+          <div class="drop-icon">📄</div>
+          <div class="drop-main">拖拽文件到这里，或点击选择</div>
+          <div class="drop-sub">PDF · PPTX · DOCX · TXT · MD</div>
+          <input id="fileInput" type="file" accept=".pdf,.pptx,.docx,.txt,.md,.markdown" hidden />
+        </div>
+        <div id="fileInfo" class="file-info" hidden>
+          <div class="file-top">
+            <span id="fileBadge" class="file-badge">PDF</span>
+            <span id="fileName" class="file-name"></span>
+          </div>
+          <div id="fileMeta" class="file-meta"></div>
+        </div>
+        <button id="startBtn" class="primary-btn" type="button" disabled>开始上课</button>
+        <div id="status" class="status" role="status" aria-live="polite">
+          <span id="statusSpinner" class="spinner" hidden></span>
+          <span id="statusText">先填好 API 设置，再上传一份资料吧～</span>
+        </div>
+      </section>
+
+      <footer class="sidebar-footer">
+        <span>🐳</span> 小肥鱼学伴 · 你的双语私塾
+      </footer>
+    </aside>
+
+    <main id="reader" class="reader">
+      <div class="reader-inner">
+        <section id="welcome" class="welcome">
+          <div class="welcome-whale">🐳</div>
+          <p class="welcome-kicker">WHALE TUTOR · 双语课堂</p>
+          <h1>把厚厚的讲义，<br />变成会发光的小课。</h1>
+          <p class="welcome-copy">上传 PDF、PPTX 或 DOCX，小肥鱼会读完你的资料，用英文为主、中文为辅，为你讲一节清清楚楚的课。</p>
+          <ul class="feature-list">
+            <li><span class="feat-ico">🟢</span><span><b>术语自动标注</b> — 学术名词环保绿下划线，悬停即见中文注释。</span></li>
+            <li><span class="feat-ico">🧭</span><span><b>点击跳转定义</b> — 后文再次出现的术语，一点就回到首次定义处。</span></li>
+            <li><span class="feat-ico">🌏</span><span><b>中英对照</b> — 英文讲解为主体，每段下方都有中文翻译。</span></li>
+          </ul>
+          <div class="welcome-actions">
+            <button id="demoBtn" class="ghost-btn" type="button">先看一节演示课 →</button>
+            <span class="welcome-note">无需 API Key 也能体验标注效果</span>
+          </div>
+        </section>
+
+        <article id="lesson" class="lesson" hidden></article>
+      </div>
+    </main>
+  </div>
+
+  <div id="tooltip" class="tooltip" hidden></div>
+  <button id="backBtn" class="back-btn" type="button" hidden>↩ 回到刚才的位置</button>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
