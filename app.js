@@ -25,7 +25,16 @@
 
   const STORE_KEY = 'whale-tutor-settings-v1';
   const CHAT_LANG_KEY = 'whale-tutor-chat-lang-v1';
+  const FORMAT_KEY = 'whale-tutor-format-v1';
   const PDF_WORKER_URL = 'vendor/pdf.worker.min.js';
+
+  const FORMAT_PRESETS = [
+    { label: '分点讲解', text: '用清晰的小标题和项目符号分点讲解，每个概念配一个简单例子。' },
+    { label: '表格对比', text: '遇到容易混淆的概念时，用 Markdown 表格对比相同点和不同点，并在表格后用几句话总结。' },
+    { label: '考试重点', text: '标出本课重点和易错点，并在最后给出 3 道自测题（含答案）。' },
+    { label: '逐句双语', text: '把讲解拆成较短的段落，让英文和中文尽量逐句对应，方便对照阅读。' },
+    { label: '先总后分', text: '先用 3 句话总结全篇，再分节展开；最后用一张要点清单收尾。' }
+  ];
 
   const SYSTEM_PROMPT = `你是一位温柔、耐心又严谨的双语讲师，负责根据学生上传的课件、论文或讲义片段，写出一节循序渐进的微型课程。
 
@@ -47,11 +56,13 @@
 
 【写作要求】
 1. 英文是主体：像老师面对面讲课一样，解释材料中的核心概念、逻辑与例子；由浅入深，英文自然流畅，适合大学生阅读。每个英文段落 60–140 词，每个英文段落后面都必须有准确、通顺的中文翻译。
-2. 全篇英文教学总量控制在 400–700 词，选取最重要的内容，不要逐字照抄原文。
+2. 每次生成的部分，英文教学总量控制在 400–700 词，选取最重要的内容，不要逐字照抄原文。
 3. 如果材料包含公式、数据或实验步骤，用文字解释它们的含义；不要编造材料中没有的事实。
 4. terms 只收录材料中真实出现的学术专有名词或首次定义的新概念，最多 12 个。term 必须是英文材料中按原样出现的形式（大小写一致，不要改写成复数或别的拼写），不要收录 the、data 这类普通词。
 5. zh 是该术语在材料语境下最标准的中文译名；definition_zh 是一句面向学生的中文解释；definition_en 是一句简洁的英文定义。
-6. 不要输出与 JSON 无关的道歉、说明或 markdown。`;
+6. 不要在 JSON 之外输出任何文字、道歉或说明。
+7. 讲解段落内部可以使用轻量 Markdown 排版：**加粗**、*斜体*、反引号包裹的行内代码、- 项目符号、1. 编号列表、Markdown 表格（表头下一行用 | --- |）。前端会渲染这些格式；表格请放在 "en" 字段中，并在 "zh" 字段给出中文表格或对应翻译。
+8. 材料可能被分成多段发送，每次只是整篇的一部分。结尾性的总结、练习题只在最后一部分出现；每段不要重复课程标题或上一段的内容。`;
 
   /* ---------------- 演示课程 ---------------- */
 
@@ -166,6 +177,10 @@
     welcome: $('welcome'),
     lesson: $('lesson'),
     demoBtn: $('demoBtn'),
+    formatPrompt: $('formatPrompt'),
+    formatPresets: $('formatPresets'),
+    clearFormat: $('clearFormat'),
+    formatCount: $('formatCount'),
     tooltip: $('tooltip'),
     backBtn: $('backBtn'),
     toast: $('toast'),
@@ -187,6 +202,7 @@
     text: '',
     sourceLabel: '',
     lesson: null,
+    lessonRequirements: '',
     busy: false,
     registry: new Map(),
     lastScroll: null,
@@ -270,6 +286,7 @@
 
     bindTooltip();
     bindChat();
+    bindFormatComposer();
   }
 
   /* ---------------- 设置持久化 ---------------- */
@@ -329,6 +346,94 @@
       return '请填写 API Key（本地模型可以留空）。';
     }
     return '';
+  }
+
+  /* ---------------- 课程格式要求 ---------------- */
+
+  function bindFormatComposer() {
+    FORMAT_PRESETS.forEach((preset) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'format-chip';
+      button.textContent = preset.label;
+      button.title = preset.text;
+      button.dataset.formatText = preset.text;
+      button.addEventListener('click', () => appendFormatPreset(preset));
+      els.formatPresets.appendChild(button);
+    });
+
+    els.formatPrompt.addEventListener('input', () => {
+      persistFormatPrompt();
+      updateFormatUI();
+      autoGrowFormatPrompt();
+    });
+
+    els.clearFormat.addEventListener('click', () => {
+      els.formatPrompt.value = '';
+      persistFormatPrompt();
+      updateFormatUI();
+      autoGrowFormatPrompt();
+      els.formatPrompt.focus();
+    });
+
+    loadFormatPrompt();
+  }
+
+  function loadFormatPrompt() {
+    let saved = '';
+    try {
+      saved = localStorage.getItem(FORMAT_KEY) || '';
+    } catch (err) {
+      saved = '';
+    }
+    els.formatPrompt.value = String(saved).slice(0, 1200);
+    updateFormatUI();
+    autoGrowFormatPrompt();
+  }
+
+  function persistFormatPrompt() {
+    try {
+      localStorage.setItem(FORMAT_KEY, els.formatPrompt.value);
+    } catch (err) {
+      /* 隐私模式下写不进去就算了 */
+    }
+  }
+
+  function updateFormatUI() {
+    const value = els.formatPrompt.value;
+    els.formatCount.textContent = value.length + ' / 1200';
+    els.clearFormat.disabled = !value.trim();
+    els.formatPresets.querySelectorAll('.format-chip').forEach((button) => {
+      button.classList.toggle('active', value.indexOf(button.dataset.formatText) !== -1);
+    });
+  }
+
+  function autoGrowFormatPrompt() {
+    const input = els.formatPrompt;
+    input.style.height = 'auto';
+    input.style.height = Math.min(Math.max(input.scrollHeight, 60), 120) + 'px';
+  }
+
+  function appendFormatPreset(preset) {
+    const current = els.formatPrompt.value.trim();
+    if (current.indexOf(preset.text) !== -1) {
+      toast('这个要求已经加进去啦～');
+      return;
+    }
+    const next = current ? current.replace(/\s+$/, '') + '\n' + preset.text : preset.text;
+    if (next.length > 1200) {
+      toast('课程要求最多 1200 字哦。', 4200);
+      return;
+    }
+    els.formatPrompt.value = next;
+    persistFormatPrompt();
+    updateFormatUI();
+    autoGrowFormatPrompt();
+    els.formatPrompt.focus();
+  }
+
+  function readFormatPrompt() {
+    return els.formatPrompt.value.trim();
   }
 
   /* ---------------- 通用小工具 ---------------- */
@@ -400,7 +505,7 @@
       }
       showFileCard(file, meta);
       els.startBtn.disabled = false;
-      setStatus('资料已就绪，可以开始上课啦 🐳', false);
+      setStatus('资料已就绪：可填写课程要求，或直接开始上课 🐳', false);
     } catch (err) {
       console.error(err);
       state.file = null;
@@ -704,6 +809,20 @@
     }
   }
 
+  function buildLessonSystemPrompt(requirements) {
+    const custom = String(requirements || '').trim();
+    if (!custom) return SYSTEM_PROMPT;
+    return [
+      SYSTEM_PROMPT,
+      '',
+      '【学生这次指定的课程要求】',
+      '学生希望这节课按下面的要求呈现。请在不改变 JSON 输出结构、英文主体 + 中文翻译、术语规则的前提下尽量满足；这些要求可以覆盖上面的篇幅、分节和风格建议。',
+      '<<< 学生要求开始 >>>',
+      custom.slice(0, 2000),
+      '<<< 学生要求结束 >>>'
+    ].join('\n');
+  }
+
   function buildUserPrompt(chunk, index, total, sourceName) {
     return [
       '材料名称：' + (sourceName || '未命名资料'),
@@ -859,6 +978,10 @@
       return;
     }
 
+    const requirements = readFormatPrompt();
+    state.lessonRequirements = requirements;
+    const lessonSystemPrompt = buildLessonSystemPrompt(requirements);
+
     if (state.chatStreaming) abortChat();
     closeChat();
 
@@ -886,7 +1009,7 @@
         );
         const raw = await callChat(
           settings,
-          SYSTEM_PROMPT,
+          lessonSystemPrompt,
           buildUserPrompt(chunks[i], i, chunks.length, state.sourceLabel)
         );
         const data = parseLessonJson(raw);
@@ -920,7 +1043,7 @@
     } finally {
       state.busy = false;
       setBusy(false);
-      els.startBtn.textContent = '开始上课';
+      els.startBtn.textContent = state.lesson ? '重新备课' : '开始上课';
       els.startBtn.disabled = !state.text;
     }
   }
@@ -1069,6 +1192,229 @@
     }
   }
 
+  function appendRichWithTerms(parent, text, registry, regex) {
+    const source = String(text || '');
+    const pattern = /(\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*\n]+\*)/g;
+    let lastIndex = 0;
+
+    for (const match of source.matchAll(pattern)) {
+      if (match.index > lastIndex) {
+        appendWithTerms(parent, source.slice(lastIndex, match.index), registry, regex);
+      }
+      const token = match[0];
+      if (token.startsWith('**') || token.startsWith('__')) {
+        const strong = document.createElement('strong');
+        appendRichWithTerms(strong, token.slice(2, -2), registry, regex);
+        parent.appendChild(strong);
+      } else if (token.startsWith('`')) {
+        const code = document.createElement('code');
+        code.textContent = token.slice(1, -1);
+        parent.appendChild(code);
+      } else {
+        const em = document.createElement('em');
+        appendRichWithTerms(em, token.slice(1, -1), registry, regex);
+        parent.appendChild(em);
+      }
+      lastIndex = match.index + token.length;
+    }
+
+    if (lastIndex < source.length) {
+      appendWithTerms(parent, source.slice(lastIndex), registry, regex);
+    }
+  }
+
+  function splitTableRow(line) {
+    let value = String(line || '').trim();
+    if (value.startsWith('|')) value = value.slice(1);
+    if (value.endsWith('|')) value = value.slice(0, -1);
+    return value.split('|').map((cell) => cell.trim());
+  }
+
+  function isTableSeparator(line) {
+    const value = String(line || '').trim();
+    if (!value || value.indexOf('-') === -1) return false;
+    const cells = splitTableRow(value);
+    return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+  }
+
+  function buildRichTable(headerCells, rows, registry, regex) {
+    const wrap = document.createElement('div');
+    wrap.className = 'rich-table-wrap';
+
+    const table = document.createElement('table');
+    table.className = 'rich-table';
+
+    const thead = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    headerCells.forEach((cellText) => {
+      const th = document.createElement('th');
+      appendRichWithTerms(th, cellText, registry, regex);
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    if (rows.length) {
+      const tbody = document.createElement('tbody');
+      rows.forEach((cells) => {
+        const tr = document.createElement('tr');
+        for (let i = 0; i < headerCells.length; i += 1) {
+          const td = document.createElement('td');
+          appendRichWithTerms(td, cells[i] || '', registry, regex);
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+    }
+
+    wrap.appendChild(table);
+    return wrap;
+  }
+
+  function renderLessonRichText(container, text, registry, regex) {
+    container.textContent = '';
+    const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+    let paragraph = [];
+    let listType = '';
+    let listEl = null;
+    let codeLines = [];
+    let inCode = false;
+
+    const flushParagraph = () => {
+      if (!paragraph.length) return;
+      const p = document.createElement('p');
+      appendRichWithTerms(p, paragraph.join(' '), registry, regex);
+      container.appendChild(p);
+      paragraph = [];
+    };
+
+    const closeList = () => {
+      listType = '';
+      listEl = null;
+    };
+
+    const flushCode = () => {
+      if (!codeLines.length) return;
+      const pre = document.createElement('pre');
+      const code = document.createElement('code');
+      code.textContent = codeLines.join('\n');
+      pre.appendChild(code);
+      container.appendChild(pre);
+      codeLines = [];
+    };
+
+    for (let i = 0; i < lines.length; i += 1) {
+      const rawLine = lines[i];
+      const line = rawLine.replace(/\s+$/, '');
+      const trimmed = line.trim();
+
+      if (trimmed.startsWith('```')) {
+        flushParagraph();
+        closeList();
+        if (inCode) {
+          flushCode();
+          inCode = false;
+        } else {
+          inCode = true;
+        }
+        continue;
+      }
+
+      if (inCode) {
+        codeLines.push(rawLine);
+        continue;
+      }
+
+      if (!trimmed) {
+        flushParagraph();
+        closeList();
+        continue;
+      }
+
+      if (line.indexOf('|') !== -1 && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+        const headerCells = splitTableRow(line);
+        if (headerCells.length) {
+          flushParagraph();
+          closeList();
+          i += 1;
+          const rows = [];
+          while (i + 1 < lines.length) {
+            const next = lines[i + 1];
+            if (!next.trim() || next.trim().indexOf('|') === -1) break;
+            if (next.trim().startsWith('```') || isTableSeparator(next)) break;
+            i += 1;
+            rows.push(splitTableRow(next));
+          }
+          container.appendChild(buildRichTable(headerCells, rows, registry, regex));
+          continue;
+        }
+      }
+
+      const heading = line.match(/^(#{1,4})\s+(.*)$/);
+      if (heading) {
+        flushParagraph();
+        closeList();
+        const h = document.createElement(heading[1].length <= 2 ? 'h4' : 'h5');
+        appendRichWithTerms(h, heading[2], registry, regex);
+        container.appendChild(h);
+        continue;
+      }
+
+      if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+        flushParagraph();
+        closeList();
+        container.appendChild(document.createElement('hr'));
+        continue;
+      }
+
+      const bullet = line.match(/^\s*[-*•]\s+(.*)$/);
+      if (bullet) {
+        flushParagraph();
+        if (listType !== 'ul') {
+          closeList();
+          listEl = document.createElement('ul');
+          listType = 'ul';
+          container.appendChild(listEl);
+        }
+        const li = document.createElement('li');
+        appendRichWithTerms(li, bullet[1], registry, regex);
+        listEl.appendChild(li);
+        continue;
+      }
+
+      const numbered = line.match(/^\s*(\d+)[.)]\s+(.*)$/);
+      if (numbered) {
+        flushParagraph();
+        if (listType !== 'ol') {
+          closeList();
+          listEl = document.createElement('ol');
+          listType = 'ol';
+          container.appendChild(listEl);
+        }
+        const li = document.createElement('li');
+        appendRichWithTerms(li, numbered[2], registry, regex);
+        listEl.appendChild(li);
+        continue;
+      }
+
+      if (/^>\s?/.test(line)) {
+        flushParagraph();
+        closeList();
+        const quote = document.createElement('blockquote');
+        appendRichWithTerms(quote, line.replace(/^>\s?/, ''), registry, regex);
+        container.appendChild(quote);
+        continue;
+      }
+
+      paragraph.push(trimmed);
+    }
+
+    flushParagraph();
+    closeList();
+    if (inCode) flushCode();
+  }
+
   function renderLesson(lesson) {
     const root = els.lesson;
     root.textContent = '';
@@ -1118,6 +1464,7 @@
     if (state.sourceLabel) metaParts.push(state.sourceLabel);
     metaParts.push(lesson.sections.length + ' 个小节');
     metaParts.push(state.registry.size + ' 个术语');
+    if (state.lessonRequirements) metaParts.push('自定义格式');
     meta.textContent = metaParts.join(' · ');
     header.appendChild(meta);
 
@@ -1127,6 +1474,17 @@
       '<span class="legend-term">绿色术语</span> 悬停看中文注释 · ' +
       '后文点击跳回定义 · 英文为主，中文翻译在每段下方';
     header.appendChild(legend);
+
+    if (state.lessonRequirements) {
+      const requirements = document.createElement('details');
+      requirements.className = 'lesson-requirements';
+      const summary = document.createElement('summary');
+      summary.textContent = '📝 本次课程要求';
+      const body = document.createElement('p');
+      body.textContent = state.lessonRequirements;
+      requirements.append(summary, body);
+      header.appendChild(requirements);
+    }
     root.appendChild(header);
 
     for (const section of lesson.sections) {
@@ -1149,15 +1507,15 @@
         const block = document.createElement('div');
         block.className = 'para-block';
 
-        const en = document.createElement('p');
+        const en = document.createElement('div');
         en.className = 'para-en';
-        appendWithTerms(en, paragraph.en, state.registry, regex);
+        renderLessonRichText(en, paragraph.en, state.registry, regex);
         block.appendChild(en);
 
         if (paragraph.zh) {
-          const zh = document.createElement('p');
+          const zh = document.createElement('div');
           zh.className = 'para-zh';
-          zh.textContent = paragraph.zh;
+          renderLessonRichText(zh, paragraph.zh, null, null);
           block.appendChild(zh);
         }
         sectionEl.appendChild(block);
@@ -1978,6 +2336,9 @@
   function buildTutorContext() {
     const parts = [];
     if (state.sourceLabel) parts.push('资料名称：' + state.sourceLabel);
+    if (state.lessonRequirements) {
+      parts.push('【学生的课程格式偏好】\n' + truncateText(state.lessonRequirements, 1200));
+    }
 
     if (state.lesson) {
       const titleParts = [];
@@ -2155,6 +2516,7 @@
     if (state.busy) return;
     const lesson = normalizeLesson(DEMO_LESSON);
     state.lesson = lesson;
+    state.lessonRequirements = '';
     state.sourceLabel = '演示课程 · Whale Tutor';
     els.welcome.hidden = true;
     els.lesson.hidden = false;

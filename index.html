@@ -18,6 +18,7 @@
         </div>
       </header>
 
+      <div id="sidebarScroll" class="sidebar-scroll">
       <section class="card">
         <h2 class="card-title"><span class="step">1</span> 接入 AI</h2>
         <div class="preset-row" aria-label="服务商预设">
@@ -59,16 +60,31 @@
           </div>
           <div id="fileMeta" class="file-meta"></div>
         </div>
-        <button id="startBtn" class="primary-btn" type="button" disabled>开始上课</button>
-        <div id="status" class="status" role="status" aria-live="polite">
-          <span id="statusSpinner" class="spinner" hidden></span>
-          <span id="statusText">先填好 API 设置，再上传一份资料吧～</span>
-        </div>
       </section>
 
       <footer class="sidebar-footer">
         <span>🐳</span> 小肥鱼学伴 · 你的双语私塾
       </footer>
+      </div>
+
+      <div class="sidebar-cta">
+        <h2 class="card-title cta-title"><span class="step">3</span> 课程要求 <span class="card-title-note">可选</span></h2>
+        <label class="field cta-field">
+          <span>第一次生成前，告诉 AI 你想要的格式</span>
+          <textarea id="formatPrompt" rows="2" maxlength="1200" placeholder="例如：分点讲解；用表格对比；最后出 3 道自测题……"></textarea>
+        </label>
+        <div id="formatPresets" class="format-presets" aria-label="格式快捷选项"></div>
+        <div class="format-actions">
+          <button id="clearFormat" class="mini-btn" type="button">清空要求</button>
+          <span id="formatCount" class="format-count">0 / 1200</span>
+        </div>
+        <p class="hint">英文主体 + 中文翻译不变；留空使用默认格式。</p>
+        <button id="startBtn" class="primary-btn" type="button" disabled>开始上课</button>
+        <div id="status" class="status" role="status" aria-live="polite">
+          <span id="statusSpinner" class="spinner" hidden></span>
+          <span id="statusText">先填好 API 设置，再上传一份资料吧～</span>
+        </div>
+      </div>
     </aside>
 
     <main id="reader" class="reader">
@@ -82,6 +98,7 @@
             <li><span class="feat-ico">🟢</span><span><b>术语自动标注</b> — 学术名词环保绿下划线，悬停即见中文注释。</span></li>
             <li><span class="feat-ico">🧭</span><span><b>点击跳转定义</b> — 后文再次出现的术语，一点就回到首次定义处。</span></li>
             <li><span class="feat-ico">🌏</span><span><b>中英对照</b> — 英文讲解为主体，每段下方都有中文翻译。</span></li>
+            <li><span class="feat-ico">🎯</span><span><b>自定义课程格式</b> — 第一次生成前写下要求：分点、表格、考试重点或自测题。</span></li>
           </ul>
           <div class="welcome-actions">
             <button id="demoBtn" class="ghost-btn" type="button">先看一节演示课 →</button>
