@@ -411,7 +411,7 @@
   function autoGrowFormatPrompt() {
     const input = els.formatPrompt;
     input.style.height = 'auto';
-    input.style.height = Math.min(Math.max(input.scrollHeight, 60), 120) + 'px';
+    input.style.height = Math.min(Math.max(input.scrollHeight, 62), 120) + 'px';
   }
 
   function appendFormatPreset(preset) {

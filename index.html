@@ -66,28 +66,10 @@
         <span>🐳</span> 小肥鱼学伴 · 你的双语私塾
       </footer>
       </div>
-
-      <div class="sidebar-cta">
-        <h2 class="card-title cta-title"><span class="step">3</span> 课程要求 <span class="card-title-note">可选</span></h2>
-        <label class="field cta-field">
-          <span>第一次生成前，告诉 AI 你想要的格式</span>
-          <textarea id="formatPrompt" rows="2" maxlength="1200" placeholder="例如：分点讲解；用表格对比；最后出 3 道自测题……"></textarea>
-        </label>
-        <div id="formatPresets" class="format-presets" aria-label="格式快捷选项"></div>
-        <div class="format-actions">
-          <button id="clearFormat" class="mini-btn" type="button">清空要求</button>
-          <span id="formatCount" class="format-count">0 / 1200</span>
-        </div>
-        <p class="hint">英文主体 + 中文翻译不变；留空使用默认格式。</p>
-        <button id="startBtn" class="primary-btn" type="button" disabled>开始上课</button>
-        <div id="status" class="status" role="status" aria-live="polite">
-          <span id="statusSpinner" class="spinner" hidden></span>
-          <span id="statusText">先填好 API 设置，再上传一份资料吧～</span>
-        </div>
-      </div>
     </aside>
 
-    <main id="reader" class="reader">
+    <main class="reader">
+      <div id="reader" class="reader-scroll">
       <div class="reader-inner">
         <section id="welcome" class="welcome">
           <div class="welcome-whale">🐳</div>
@@ -108,6 +90,36 @@
 
         <article id="lesson" class="lesson" hidden></article>
       </div>
+      </div>
+
+      <section class="lesson-composer" aria-label="课程要求">
+        <div class="composer-inner">
+          <div class="composer-head">
+            <div class="composer-title">
+              <span class="step">3</span> 课程要求
+              <span class="card-title-note">可选</span>
+            </div>
+            <span class="composer-note">英文主体 + 中文翻译不变 · 留空使用默认格式</span>
+          </div>
+          <div class="composer-main">
+            <textarea id="formatPrompt" rows="2" maxlength="1200" aria-label="课程要求" placeholder="第一次生成前，告诉 AI 你想要的格式，例如：分点讲解；用表格对比；最后出 3 道自测题……"></textarea>
+            <div class="composer-action">
+              <button id="startBtn" class="primary-btn" type="button" disabled>开始上课</button>
+            </div>
+          </div>
+          <div class="composer-aux">
+            <div id="formatPresets" class="format-presets" aria-label="格式快捷选项"></div>
+            <div class="composer-meta">
+              <button id="clearFormat" class="mini-btn" type="button">清空要求</button>
+              <span id="formatCount" class="format-count">0 / 1200</span>
+            </div>
+          </div>
+          <div id="status" class="status" role="status" aria-live="polite">
+            <span id="statusSpinner" class="spinner" hidden></span>
+            <span id="statusText">先填好 API 设置，再上传一份资料吧～</span>
+          </div>
+        </div>
+      </section>
     </main>
   </div>
 

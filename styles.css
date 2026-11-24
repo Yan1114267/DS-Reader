@@ -88,87 +88,34 @@ button {
   padding: 0 3px 4px 0;
 }
 
-.sidebar-cta {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  padding: 11px 12px 10px;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 10px 26px rgba(10, 60, 80, 0.07);
-}
-
-.sidebar-cta .cta-title {
-  margin: 0 0 8px;
-  font-size: 12.5px;
-}
-
-.sidebar-cta .cta-field {
-  margin-bottom: 7px;
-}
-
-.sidebar-cta .cta-field > span {
-  margin-bottom: 4px;
-  font-size: 11px;
-}
-
-.sidebar-cta .field textarea {
-  min-height: 60px;
-  max-height: 120px;
-  font-size: 12.5px;
-  line-height: 1.55;
-}
-
-.sidebar-cta .format-presets {
-  gap: 5px;
-  margin: 0 0 6px;
-}
-
-.sidebar-cta .format-chip {
-  padding: 3px 7px;
-  font-size: 10.5px;
-}
-
-.sidebar-cta .format-actions {
-  margin-bottom: 5px;
-}
-
-.sidebar-cta .hint {
-  font-size: 10.5px;
-  line-height: 1.5;
-}
-
-.sidebar-cta .primary-btn {
-  margin-top: 9px;
-  padding: 10px 14px;
-}
-
-.sidebar-cta .status {
-  margin-top: 7px;
-  font-size: 10.5px;
-}
-
 .reader {
   flex: 1;
   min-width: 0;
   height: 100vh;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   position: relative;
+  overflow: hidden;
+}
+
+.reader-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .reader-inner {
   max-width: 840px;
   margin: 0 auto;
-  padding: 64px 44px 140px;
+  padding: 64px 44px 90px;
 }
 
-.reader::-webkit-scrollbar,
+.reader-scroll::-webkit-scrollbar,
 .sidebar-scroll::-webkit-scrollbar {
   width: 10px;
 }
 
-.reader::-webkit-scrollbar-thumb,
+.reader-scroll::-webkit-scrollbar-thumb,
 .sidebar-scroll::-webkit-scrollbar-thumb {
   background: #c7dde0;
   border-radius: 999px;
@@ -176,11 +123,138 @@ button {
   background-clip: padding-box;
 }
 
-.reader::-webkit-scrollbar-thumb:hover,
+.reader-scroll::-webkit-scrollbar-thumb:hover,
 .sidebar-scroll::-webkit-scrollbar-thumb:hover {
   background: #a9cbd0;
   border: 2px solid transparent;
   background-clip: padding-box;
+}
+
+/* ---------- 右侧课程要求输入栏 ---------- */
+
+.lesson-composer {
+  flex: 0 0 auto;
+  padding: 12px 44px 14px;
+  border-top: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 -14px 34px rgba(10, 60, 80, 0.06);
+  backdrop-filter: blur(12px);
+  z-index: 20;
+}
+
+.composer-inner {
+  max-width: 840px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.composer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.composer-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--teal-deep);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.composer-title .card-title-note {
+  margin-left: 1px;
+}
+
+.composer-note {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-2);
+  font-size: 10.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.composer-main {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.composer-main textarea {
+  flex: 1;
+  min-height: 62px;
+  max-height: 120px;
+  padding: 9px 12px;
+  resize: none;
+  overflow-y: auto;
+  border: 1px solid #cfe2e4;
+  border-radius: 12px;
+  background: #fbfdfd;
+  font-size: 13px;
+  line-height: 1.6;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s, background-color 0.15s;
+}
+
+.composer-main textarea:focus {
+  border-color: #5fb6c4;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(14, 116, 144, 0.1);
+}
+
+.composer-main textarea::placeholder {
+  color: #9ab0b7;
+}
+
+.composer-action {
+  flex: 0 0 128px;
+  display: flex;
+}
+
+.composer-action .primary-btn {
+  width: 100%;
+  height: 62px;
+  min-height: 62px;
+  margin: 0;
+  padding: 0 16px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.composer-aux {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.composer-aux .format-presets {
+  margin: 0;
+  gap: 5px;
+}
+
+.composer-aux .format-chip {
+  padding: 3px 8px;
+  font-size: 10.5px;
+}
+
+.composer-meta {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.composer-inner .status {
+  margin-top: 0;
+  min-height: 16px;
+  font-size: 10.5px;
 }
 
 /* ---------- 品牌 ---------- */
@@ -323,28 +397,6 @@ button {
   background: #fff;
 }
 
-.field textarea {
-  width: 100%;
-  min-height: 74px;
-  max-height: 160px;
-  padding: 9px 11px;
-  resize: none;
-  overflow-y: auto;
-  border: 1px solid #cfdee2;
-  border-radius: 10px;
-  background: #fbfdfd;
-  font-size: 13px;
-  line-height: 1.6;
-  outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s, background-color 0.15s;
-}
-
-.field textarea:focus {
-  border-color: #5fb6c4;
-  box-shadow: 0 0 0 3px rgba(14, 116, 144, 0.12);
-  background: #fff;
-}
-
 .format-presets {
   display: flex;
   flex-wrap: wrap;
@@ -373,13 +425,6 @@ button {
   background: #e2f6f2;
   color: #0b6477;
   font-weight: 700;
-}
-
-.format-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
 }
 
 .mini-btn {
@@ -1236,8 +1281,8 @@ button {
 
 .back-btn {
   position: fixed;
+  top: 82px;
   right: 26px;
-  bottom: 88px;
   z-index: 70;
   border: 1px solid #b9d9dd;
   background: rgba(255, 255, 255, 0.94);
@@ -1257,8 +1302,8 @@ button {
 
 .chat-toggle {
   position: fixed;
+  top: 22px;
   right: 26px;
-  bottom: 26px;
   z-index: 50;
   display: inline-flex;
   align-items: center;
@@ -1731,11 +1776,19 @@ button {
 
   .reader {
     height: auto;
+  }
+
+  .reader-scroll {
+    flex: none;
     overflow: visible;
   }
 
   .reader-inner {
-    padding: 36px 22px 100px;
+    padding: 36px 22px 60px;
+  }
+
+  .lesson-composer {
+    padding: 12px 22px;
   }
 
   .welcome {
@@ -1749,11 +1802,12 @@ button {
   }
 
   .chat-toggle {
+    top: 16px;
     right: 16px;
-    bottom: 16px;
   }
 
   .back-btn {
+    top: 70px;
     right: 16px;
   }
 }
@@ -1771,6 +1825,31 @@ button {
     padding: 18px 16px 22px;
   }
 
+  .lesson-composer {
+    padding: 10px 14px 12px;
+  }
+
+  .composer-note {
+    display: none;
+  }
+
+  .composer-main {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .composer-action {
+    flex: none;
+  }
+
+  .composer-action .primary-btn {
+    min-height: 42px;
+  }
+
+  .composer-aux {
+    flex-wrap: wrap;
+  }
+
   .chat-panel {
     right: 12px;
     bottom: 12px;
@@ -1779,8 +1858,13 @@ button {
   }
 
   .chat-toggle {
+    top: 12px;
     right: 12px;
-    bottom: 12px;
+  }
+
+  .back-btn {
+    top: 64px;
+    right: 12px;
   }
 }
 
