@@ -863,13 +863,54 @@
     return null;
   }
 
+  function escapeJsonControlChars(source) {
+    let out = '';
+    let inString = false;
+    let escaped = false;
+
+    for (let i = 0; i < source.length; i += 1) {
+      const ch = source[i];
+      if (inString) {
+        if (escaped) {
+          out += ch;
+          escaped = false;
+        } else if (ch === '\\') {
+          out += ch;
+          escaped = true;
+        } else if (ch === '"') {
+          out += ch;
+          inString = false;
+        } else if (ch === '\n') {
+          out += '\\n';
+        } else if (ch === '\r') {
+          out += '\\r';
+        } else if (ch === '\t') {
+          out += '\\t';
+        } else {
+          out += ch;
+        }
+      } else {
+        out += ch;
+        if (ch === '"') inString = true;
+      }
+    }
+    return out;
+  }
+
   function parseLessonJson(raw) {
     let text = String(raw || '').trim();
     text = text.replace(/^```[a-zA-Z]*\s*/, '').replace(/```\s*$/, '').trim();
     const jsonText = extractBalancedObject(text);
     if (!jsonText) return null;
 
-    const attempts = [jsonText, jsonText.replace(/,\s*([}\]])/g, '$1')];
+    const withoutTrailingCommas = jsonText.replace(/,\s*([}\]])/g, '$1');
+    const attempts = [
+      jsonText,
+      withoutTrailingCommas,
+      escapeJsonControlChars(jsonText),
+      escapeJsonControlChars(withoutTrailingCommas)
+    ];
+
     for (const attempt of attempts) {
       try {
         const data = JSON.parse(attempt);
