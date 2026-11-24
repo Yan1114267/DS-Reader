@@ -30,10 +30,15 @@
           <span>接口地址 Base URL</span>
           <input id="baseUrl" type="text" autocomplete="off" spellcheck="false" placeholder="https://api.deepseek.com/v1" />
         </label>
-        <label class="field">
-          <span>模型名称</span>
-          <input id="model" type="text" autocomplete="off" spellcheck="false" placeholder="deepseek-chat" />
-        </label>
+        <div class="field">
+          <label for="model">模型名称</label>
+          <div class="model-picker">
+            <input id="model" type="text" list="modelOptions" autocomplete="off" spellcheck="false" placeholder="deepseek-chat" aria-describedby="modelHint" />
+            <button id="fetchModelsBtn" class="model-fetch" type="button" title="根据接口地址和 API Key 查询可用模型">识别模型</button>
+          </div>
+          <datalist id="modelOptions"></datalist>
+          <p id="modelHint" class="field-hint" role="status" aria-live="polite" hidden></p>
+        </div>
         <label class="field">
           <span>API Key</span>
           <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-..." />
@@ -59,7 +64,7 @@
         </label>
         <label class="field ocr-model-field" id="visionModelRow" hidden>
           <span>视觉模型名称（留空沿用上方模型）</span>
-          <input id="visionModel" type="text" autocomplete="off" spellcheck="false" placeholder="例如：gpt-4o-mini / qwen-vl-plus" />
+          <input id="visionModel" type="text" list="modelOptions" autocomplete="off" spellcheck="false" placeholder="例如：gpt-4o-mini / qwen-vl-plus" />
         </label>
         <p class="hint ocr-hint">SVG 会直接读取文字；PPT / 扫描 PDF 图片会调用视觉模型（共用上方接口与 Key）。请在上传前设置，修改后重新选择文件生效。</p>
         <div id="fileInfo" class="file-info" hidden>

@@ -163,6 +163,9 @@
   const els = {
     baseUrl: $('baseUrl'),
     model: $('model'),
+    fetchModelsBtn: $('fetchModelsBtn'),
+    modelOptions: $('modelOptions'),
+    modelHint: $('modelHint'),
     apiKey: $('apiKey'),
     rememberKey: $('rememberKey'),
     visionOcr: $('visionOcr'),
@@ -218,7 +221,10 @@
     chatLang: 'zh',
     chatStreaming: false,
     chatAbort: null,
-    chatRunId: 0
+    chatRunId: 0,
+    modelsFetchKey: '',
+    modelsAttempt: { key: '', time: 0 },
+    modelsLoading: false
   };
 
   let activeTermEl = null;
@@ -240,6 +246,10 @@
     [els.baseUrl, els.model, els.apiKey, els.visionModel].forEach((input) => {
       input.addEventListener('input', persistSettings);
     });
+    els.fetchModelsBtn.addEventListener('click', () => fetchAvailableModels({ silent: false }));
+    els.model.addEventListener('focus', maybeAutoFetchModels);
+    els.apiKey.addEventListener('change', maybeAutoFetchModels);
+    els.baseUrl.addEventListener('change', maybeAutoFetchModels);
     els.rememberKey.addEventListener('change', persistSettings);
     els.visionOcr.addEventListener('change', () => {
       updateVisionControls();
@@ -256,6 +266,7 @@
         els.baseUrl.value = preset.baseUrl;
         els.model.value = preset.model;
         persistSettings();
+        maybeAutoFetchModels();
         toast('已填入 ' + button.textContent.trim() + ' 预设，补上 API Key 就能用了～');
       });
     });
@@ -379,6 +390,150 @@
       return '请填写 API Key（本地模型可以留空）。';
     }
     return '';
+  }
+
+  /* ---------------- 识别可用模型 ---------------- */
+
+  function isLocalBaseUrl(baseUrl) {
+    return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?/i.test(baseUrl);
+  }
+
+  function buildModelsEndpoint(baseUrl) {
+    let url = String(baseUrl || '').trim().replace(/\/+$/, '');
+    if (/\/models$/i.test(url)) return url;
+    if (/\/chat\/completions$/i.test(url)) return url.replace(/\/chat\/completions$/i, '/models');
+    if (/\/v\d+[a-z]*$/i.test(url) || /\/openai$/i.test(url)) return url + '/models';
+    return url + '/v1/models';
+  }
+
+  function extractModelIds(data) {
+    const raw = Array.isArray(data)
+      ? data
+      : (data && Array.isArray(data.data))
+        ? data.data
+        : (data && Array.isArray(data.models))
+          ? data.models
+          : [];
+    const seen = new Set();
+    const ids = [];
+    raw.forEach((item) => {
+      let id = '';
+      if (typeof item === 'string') id = item;
+      else if (item && typeof item.id === 'string') id = item.id;
+      else if (item && typeof item.model === 'string') id = item.model;
+      else if (item && typeof item.name === 'string') id = item.name;
+      id = id.trim();
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      ids.push(id);
+    });
+    return ids.sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
+  }
+
+  function applyModelOptions(ids) {
+    els.modelOptions.textContent = '';
+    const fragment = document.createDocumentFragment();
+    ids.forEach((id) => {
+      const option = document.createElement('option');
+      option.value = id;
+      fragment.appendChild(option);
+    });
+    els.modelOptions.appendChild(fragment);
+  }
+
+  function updateModelFetchButton(loading) {
+    els.fetchModelsBtn.disabled = loading;
+    els.fetchModelsBtn.textContent = loading ? '识别中…' : '识别模型';
+  }
+
+  function showModelHint(text, isError) {
+    els.modelHint.textContent = text;
+    els.modelHint.hidden = false;
+    els.modelHint.classList.toggle('error', Boolean(isError));
+  }
+
+  function settingsFingerprint(settings) {
+    return settings.baseUrl + '|' + settings.apiKey;
+  }
+
+  function maybeAutoFetchModels() {
+    if (state.modelsLoading) return;
+    const settings = readSettings();
+    if (!settings.baseUrl || !/^https?:\/\//i.test(settings.baseUrl)) return;
+    if (!settings.apiKey && !isLocalBaseUrl(settings.baseUrl)) return;
+    const key = settingsFingerprint(settings);
+    if (state.modelsFetchKey === key) return;
+    if (state.modelsAttempt.key === key && Date.now() - state.modelsAttempt.time < 20000) return;
+    fetchAvailableModels({ silent: true });
+  }
+
+  async function fetchAvailableModels(options) {
+    const silent = Boolean(options && options.silent);
+    if (state.modelsLoading) return;
+
+    const settings = readSettings();
+    if (!settings.baseUrl) {
+      if (!silent) showModelHint('请先填写接口地址 Base URL。', true);
+      return;
+    }
+    if (!/^https?:\/\//i.test(settings.baseUrl)) {
+      if (!silent) showModelHint('接口地址要以 http:// 或 https:// 开头。', true);
+      return;
+    }
+    if (!settings.apiKey && !isLocalBaseUrl(settings.baseUrl)) {
+      if (!silent) showModelHint('先填上 API Key，大鲸鱼才能替你问服务商有哪些模型哦。', true);
+      return;
+    }
+
+    state.modelsLoading = true;
+    updateModelFetchButton(true);
+    if (!silent) showModelHint('正在向服务商查询可用模型…', false);
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 15000);
+
+    try {
+      const headers = { Accept: 'application/json' };
+      if (settings.apiKey) headers.Authorization = 'Bearer ' + settings.apiKey;
+      const response = await fetch(buildModelsEndpoint(settings.baseUrl), {
+        method: 'GET',
+        headers,
+        signal: controller.signal
+      });
+      if (!response.ok) throw await apiError(response);
+      const data = await response.json();
+      const ids = extractModelIds(data);
+      if (!ids.length) throw new Error('接口没有返回任何模型。');
+
+      applyModelOptions(ids);
+      state.modelsFetchKey = settingsFingerprint(settings);
+      showModelHint('已识别 ' + ids.length + ' 个模型，点开「模型名称」输入框就能选。', false);
+      if (!els.model.value.trim() && ids.length === 1) {
+        els.model.value = ids[0];
+        persistSettings();
+      }
+      if (!silent) toast('已识别 ' + ids.length + ' 个可用模型～');
+    } catch (err) {
+      const key = settingsFingerprint(settings);
+      state.modelsAttempt = { key, time: Date.now() };
+      if (state.modelsFetchKey !== key) {
+        state.modelsFetchKey = '';
+        applyModelOptions([]);
+      }
+      const message = err && err.status === 404
+        ? '该服务没有提供模型列表接口（HTTP 404），请手动填写模型名称。'
+        : err && err.name === 'AbortError'
+          ? '查询超时（15 秒）。'
+          : err instanceof TypeError
+            ? '连接失败，可能是接口地址有误，或该服务不允许浏览器查询模型（CORS）。'
+            : (err && err.message) || '查询失败。';
+      showModelHint('没能自动识别模型：' + message + ' 你仍然可以直接手填模型名称。', true);
+      if (!silent) toast('识别失败：' + message, 6000);
+    } finally {
+      window.clearTimeout(timer);
+      state.modelsLoading = false;
+      updateModelFetchButton(false);
+    }
   }
 
   /* ---------------- 课程格式要求 ---------------- */
