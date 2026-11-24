@@ -1512,7 +1512,7 @@
     const legend = document.createElement('div');
     legend.className = 'lesson-legend';
     legend.innerHTML =
-      '<span class="legend-term">绿色术语</span> 悬停看中文注释 · ' +
+      '<span class="legend-term">蓝色术语</span> 悬停看中文注释 · ' +
       '后文点击跳回定义 · 英文为主，中文翻译在每段下方';
     header.appendChild(legend);
 
@@ -2563,7 +2563,7 @@
     els.lesson.hidden = false;
     renderLesson(lesson);
     resetChat();
-    setStatus('演示课程已载入：悬停绿色词、点击后文术语试试看～', false);
+    setStatus('演示课程已载入：悬停蓝色词、点击后文术语试试看～', false);
   }
 
   /* ---------------- 启动 ---------------- */
