@@ -94,6 +94,38 @@
     </main>
   </div>
 
+  <button id="chatToggle" class="chat-toggle" type="button" aria-expanded="false" aria-controls="chatPanel">💬 问小肥鱼</button>
+
+  <aside id="chatPanel" class="chat-panel" hidden aria-label="小肥鱼答疑">
+    <header class="chat-head">
+      <div class="chat-identity">
+        <span class="chat-avatar" aria-hidden="true">🐳</span>
+        <div>
+          <div class="chat-name">小肥鱼答疑</div>
+          <div class="chat-sub">基于当前讲义与资料</div>
+        </div>
+      </div>
+      <div class="chat-tools">
+        <div class="chat-lang" role="group" aria-label="回答语言">
+          <button type="button" data-chat-lang="zh" class="active" aria-pressed="true">中文</button>
+          <button type="button" data-chat-lang="bilingual" aria-pressed="false">双语</button>
+        </div>
+        <button id="chatClose" class="chat-close" type="button" aria-label="关闭答疑">×</button>
+      </div>
+    </header>
+    <div id="chatMessages" class="chat-messages" role="log" aria-live="polite">
+      <div id="chatEmpty" class="chat-empty">
+        <div class="chat-empty-icon" aria-hidden="true">🐳</div>
+        <p>有不懂的地方，随时问小肥鱼～</p>
+        <div id="chatSuggestions" class="chat-suggestions"></div>
+      </div>
+    </div>
+    <form id="chatForm" class="chat-form">
+      <textarea id="chatInput" rows="1" maxlength="2000" placeholder="不懂就问，比如：这一节的重点是什么？" aria-label="输入你的问题"></textarea>
+      <button id="chatSend" class="chat-send" type="submit">发送</button>
+    </form>
+  </aside>
+
   <div id="tooltip" class="tooltip" hidden></div>
   <button id="backBtn" class="back-btn" type="button" hidden>↩ 回到刚才的位置</button>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>

@@ -12,7 +12,9 @@
     maxChunks: 8,              // 单次备课最多生成几段
     maxTokens: 4096,           // 每段回答的最大 token 数
     temperature: 0.4,
-    requestTimeoutMs: 180000
+    requestTimeoutMs: 180000,
+    chatMaxTokens: 2048,       // 答疑回答的最大 token 数
+    chatTimeoutMs: 180000
   };
 
   const PRESETS = {
@@ -22,6 +24,7 @@
   };
 
   const STORE_KEY = 'whale-tutor-settings-v1';
+  const CHAT_LANG_KEY = 'whale-tutor-chat-lang-v1';
   const PDF_WORKER_URL = 'vendor/pdf.worker.min.js';
 
   const SYSTEM_PROMPT = `你是一位温柔、耐心又严谨的双语讲师，负责根据学生上传的课件、论文或讲义片段，写出一节循序渐进的微型课程。
@@ -165,7 +168,16 @@
     demoBtn: $('demoBtn'),
     tooltip: $('tooltip'),
     backBtn: $('backBtn'),
-    toast: $('toast')
+    toast: $('toast'),
+    chatToggle: $('chatToggle'),
+    chatPanel: $('chatPanel'),
+    chatClose: $('chatClose'),
+    chatMessages: $('chatMessages'),
+    chatEmpty: $('chatEmpty'),
+    chatSuggestions: $('chatSuggestions'),
+    chatForm: $('chatForm'),
+    chatInput: $('chatInput'),
+    chatSend: $('chatSend')
   };
 
   /* ---------------- 状态 ---------------- */
@@ -178,7 +190,12 @@
     busy: false,
     registry: new Map(),
     lastScroll: null,
-    backTimer: 0
+    backTimer: 0,
+    chatHistory: [],
+    chatLang: 'zh',
+    chatStreaming: false,
+    chatAbort: null,
+    chatRunId: 0
   };
 
   let activeTermEl = null;
@@ -189,7 +206,9 @@
 
   function init() {
     loadSettings();
+    loadChatLanguage();
     bindEvents();
+    resetChat();
     setStatus('先填好 API 设置，再上传一份资料吧～', false);
     if (location.hash === '#demo') loadDemo();
   }
@@ -250,6 +269,7 @@
     });
 
     bindTooltip();
+    bindChat();
   }
 
   /* ---------------- 设置持久化 ---------------- */
@@ -839,6 +859,9 @@
       return;
     }
 
+    if (state.chatStreaming) abortChat();
+    closeChat();
+
     state.busy = true;
     setBusy(true);
     hideTooltip();
@@ -880,6 +903,7 @@
 
       state.lesson = lesson;
       renderLesson(lesson);
+      resetChat();
       setStatus('✨ 备课完成，祝学习愉快～', false);
 
       if (totalChunks > CONFIG.maxChunks) {
@@ -1351,6 +1375,780 @@
     window.addEventListener('blur', hideTooltip);
   }
 
+  /* ---------------- 随时答疑 ---------------- */
+
+  function bindChat() {
+    els.chatToggle.addEventListener('click', openChat);
+    els.chatClose.addEventListener('click', closeChat);
+
+    els.chatForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      if (state.chatStreaming) {
+        abortChat();
+        return;
+      }
+      sendChat(els.chatInput.value);
+    });
+
+    els.chatInput.addEventListener('input', autoGrowChatInput);
+    els.chatInput.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' || event.shiftKey) return;
+      if (event.isComposing || event.keyCode === 229) return;
+      event.preventDefault();
+      if (state.chatStreaming) return;
+      if (els.chatInput.value.trim()) els.chatForm.requestSubmit();
+    });
+
+    document.querySelectorAll('[data-chat-lang]').forEach((button) => {
+      button.addEventListener('click', () => setChatLanguage(button.dataset.chatLang));
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !els.chatPanel.hidden) closeChat();
+    });
+  }
+
+  function loadChatLanguage() {
+    let saved = '';
+    try {
+      saved = localStorage.getItem(CHAT_LANG_KEY) || '';
+    } catch (err) {
+      saved = '';
+    }
+    state.chatLang = saved === 'bilingual' ? 'bilingual' : 'zh';
+    applyChatLanguageUI();
+  }
+
+  function applyChatLanguageUI() {
+    document.querySelectorAll('[data-chat-lang]').forEach((button) => {
+      const active = button.dataset.chatLang === state.chatLang;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+  }
+
+  function setChatLanguage(lang) {
+    if (lang !== 'zh' && lang !== 'bilingual') return;
+    if (state.chatLang === lang) return;
+    state.chatLang = lang;
+    applyChatLanguageUI();
+    try {
+      localStorage.setItem(CHAT_LANG_KEY, lang);
+    } catch (err) {
+      /* 隐私模式下写不进去就算了 */
+    }
+  }
+
+  function openChat() {
+    hideTooltip();
+    els.chatPanel.hidden = false;
+    els.chatToggle.hidden = true;
+    els.chatToggle.setAttribute('aria-expanded', 'true');
+    els.chatToggle.classList.remove('has-update');
+    els.backBtn.hidden = true;
+    if (!hasChatMessages()) refreshChatSuggestions();
+    window.setTimeout(() => {
+      if (!state.chatStreaming) els.chatInput.focus();
+      scrollChatToBottom(false);
+    }, 40);
+  }
+
+  function closeChat() {
+    els.chatPanel.hidden = true;
+    els.chatToggle.hidden = false;
+    els.chatToggle.setAttribute('aria-expanded', 'false');
+  }
+
+  function markChatUnread() {
+    if (els.chatPanel.hidden) els.chatToggle.classList.add('has-update');
+  }
+
+  function updateChatControls() {
+    if (!els.chatSend) return;
+    const streaming = state.chatStreaming;
+    els.chatSend.textContent = streaming ? '停止' : '发送';
+    els.chatSend.classList.toggle('is-stop', streaming);
+    els.chatInput.disabled = streaming;
+    els.chatInput.placeholder = streaming
+      ? '小肥鱼正在回答…'
+      : '不懂就问，比如：这一节的重点是什么？';
+    if (!streaming) autoGrowChatInput();
+  }
+
+  function autoGrowChatInput() {
+    const input = els.chatInput;
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+  }
+
+  function refreshChatSuggestions() {
+    if (!els.chatSuggestions) return;
+    els.chatSuggestions.textContent = '';
+
+    const suggestions = [];
+    if (state.lesson && state.registry.size) {
+      const firstTerm = state.registry.values().next().value;
+      suggestions.push('用更简单的话解释这一课');
+      suggestions.push('这一课最重要的概念是什么？');
+      suggestions.push('“' + firstTerm.term + '”这个词怎么理解？');
+    } else if (state.lesson) {
+      suggestions.push('用更简单的话解释这一课');
+      suggestions.push('这一课最重要的概念是什么？');
+      suggestions.push('给我一个生活中的例子');
+    } else if (state.text) {
+      suggestions.push('这份资料主要讲了什么？');
+      suggestions.push('帮我梳理核心概念');
+      suggestions.push('这些内容可以怎么记？');
+    } else {
+      suggestions.push('帮我制定一个学习计划');
+      suggestions.push('怎样高效读懂一篇论文？');
+      suggestions.push('用简单的话解释费曼学习法');
+    }
+
+    suggestions.forEach((text) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'chat-suggestion';
+      button.textContent = text;
+      button.addEventListener('click', () => {
+        if (state.chatStreaming) return;
+        sendChat(text);
+      });
+      els.chatSuggestions.appendChild(button);
+    });
+  }
+
+  function hasChatMessages() {
+    return Boolean(els.chatMessages.querySelector('.chat-msg, .chat-note'));
+  }
+
+  function resetChat() {
+    state.chatRunId += 1;
+    if (state.chatAbort) {
+      try {
+        state.chatAbort.abort();
+      } catch (err) {
+        /* ignore */
+      }
+    }
+    state.chatStreaming = false;
+    state.chatAbort = null;
+    state.chatHistory = [];
+
+    if (els.chatMessages) {
+      [...els.chatMessages.querySelectorAll('.chat-msg, .chat-note')].forEach((node) => node.remove());
+      els.chatEmpty.hidden = false;
+    }
+    if (els.chatInput) {
+      els.chatInput.value = '';
+      els.chatInput.style.height = '';
+    }
+    els.chatToggle.classList.remove('has-update');
+    refreshChatSuggestions();
+    updateChatControls();
+  }
+
+  function appendUserChatMessage(text) {
+    els.chatEmpty.hidden = true;
+    const row = document.createElement('div');
+    row.className = 'chat-msg chat-msg-user';
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-bubble';
+    bubble.textContent = text;
+    row.appendChild(bubble);
+    els.chatMessages.appendChild(row);
+  }
+
+  function appendAssistantMessage() {
+    els.chatEmpty.hidden = true;
+    const row = document.createElement('div');
+    row.className = 'chat-msg chat-msg-ai';
+
+    const avatar = document.createElement('div');
+    avatar.className = 'chat-msg-avatar';
+    avatar.setAttribute('aria-hidden', 'true');
+    avatar.textContent = '🐳';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-bubble';
+
+    const textEl = document.createElement('div');
+    textEl.className = 'chat-text';
+    renderTypingIndicator(textEl);
+    bubble.appendChild(textEl);
+    row.append(avatar, bubble);
+    els.chatMessages.appendChild(row);
+
+    return { el: row, textEl, content: '', queued: false, done: false };
+  }
+
+  function renderTypingIndicator(container) {
+    container.textContent = '';
+    const wrap = document.createElement('span');
+    wrap.className = 'chat-typing';
+    wrap.setAttribute('aria-label', '正在思考');
+    for (let i = 0; i < 3; i += 1) {
+      wrap.appendChild(document.createElement('i'));
+    }
+    container.appendChild(wrap);
+  }
+
+  function scheduleChatMessageRender(message) {
+    if (message.queued) return;
+    message.queued = true;
+    window.requestAnimationFrame(() => {
+      message.queued = false;
+      renderChatMessage(message, !message.done);
+    });
+  }
+
+  function renderChatMessage(message, streaming) {
+    if (!streaming) message.done = true;
+    const container = message.textEl;
+    container.textContent = '';
+
+    if (!message.content) {
+      renderTypingIndicator(container);
+    } else {
+      renderChatMarkdown(container, message.content);
+      if (streaming) {
+        const cursor = document.createElement('span');
+        cursor.className = 'chat-cursor';
+        cursor.setAttribute('aria-hidden', 'true');
+        container.appendChild(cursor);
+      }
+    }
+
+    if (isChatNearBottom()) scrollChatToBottom(false);
+  }
+
+  function renderChatMarkdown(container, text) {
+    container.textContent = '';
+    const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+    let paragraph = [];
+    let listType = '';
+    let listEl = null;
+    let codeLines = [];
+    let inCode = false;
+
+    const flushParagraph = () => {
+      if (!paragraph.length) return;
+      const p = document.createElement('p');
+      appendInlineMarkdown(p, paragraph.join(' '));
+      container.appendChild(p);
+      paragraph = [];
+    };
+
+    const closeList = () => {
+      listType = '';
+      listEl = null;
+    };
+
+    const flushCode = () => {
+      if (!codeLines.length) return;
+      const pre = document.createElement('pre');
+      const code = document.createElement('code');
+      code.textContent = codeLines.join('\n');
+      pre.appendChild(code);
+      container.appendChild(pre);
+      codeLines = [];
+    };
+
+    for (const rawLine of lines) {
+      const line = rawLine.replace(/\s+$/, '');
+
+      if (line.trim().startsWith('```')) {
+        flushParagraph();
+        closeList();
+        if (inCode) {
+          flushCode();
+          inCode = false;
+        } else {
+          inCode = true;
+        }
+        continue;
+      }
+
+      if (inCode) {
+        codeLines.push(rawLine);
+        continue;
+      }
+
+      if (!line.trim()) {
+        flushParagraph();
+        closeList();
+        continue;
+      }
+
+      const heading = line.match(/^(#{1,4})\s+(.*)$/);
+      if (heading) {
+        flushParagraph();
+        closeList();
+        const h = document.createElement('h4');
+        appendInlineMarkdown(h, heading[2]);
+        container.appendChild(h);
+        continue;
+      }
+
+      if (/^(-{3,}|\*{3,}|_{3,})$/.test(line.trim())) {
+        flushParagraph();
+        closeList();
+        container.appendChild(document.createElement('hr'));
+        continue;
+      }
+
+      const bullet = line.match(/^\s*[-*•]\s+(.*)$/);
+      if (bullet) {
+        flushParagraph();
+        if (listType !== 'ul') {
+          closeList();
+          listEl = document.createElement('ul');
+          listType = 'ul';
+          container.appendChild(listEl);
+        }
+        const li = document.createElement('li');
+        appendInlineMarkdown(li, bullet[1]);
+        listEl.appendChild(li);
+        continue;
+      }
+
+      const numbered = line.match(/^\s*(\d+)[.)]\s+(.*)$/);
+      if (numbered) {
+        flushParagraph();
+        if (listType !== 'ol') {
+          closeList();
+          listEl = document.createElement('ol');
+          listType = 'ol';
+          container.appendChild(listEl);
+        }
+        const li = document.createElement('li');
+        appendInlineMarkdown(li, numbered[2]);
+        listEl.appendChild(li);
+        continue;
+      }
+
+      if (/^>\s?/.test(line)) {
+        flushParagraph();
+        closeList();
+        const quote = document.createElement('blockquote');
+        appendInlineMarkdown(quote, line.replace(/^>\s?/, ''));
+        container.appendChild(quote);
+        continue;
+      }
+
+      paragraph.push(line.trim());
+    }
+
+    flushParagraph();
+    closeList();
+    if (inCode) flushCode();
+  }
+
+  function appendInlineMarkdown(parent, text) {
+    const pattern = /(\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*\n]+\*)/g;
+    let lastIndex = 0;
+
+    for (const match of text.matchAll(pattern)) {
+      if (match.index > lastIndex) {
+        parent.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+      }
+      const token = match[0];
+      if (token.startsWith('**') || token.startsWith('__')) {
+        const strong = document.createElement('strong');
+        strong.textContent = token.slice(2, -2);
+        parent.appendChild(strong);
+      } else if (token.startsWith('`')) {
+        const code = document.createElement('code');
+        code.textContent = token.slice(1, -1);
+        parent.appendChild(code);
+      } else {
+        const em = document.createElement('em');
+        em.textContent = token.slice(1, -1);
+        parent.appendChild(em);
+      }
+      lastIndex = match.index + token.length;
+    }
+
+    if (lastIndex < text.length) {
+      parent.appendChild(document.createTextNode(text.slice(lastIndex)));
+    }
+  }
+
+  function appendChatNote(text) {
+    els.chatEmpty.hidden = true;
+    const note = document.createElement('div');
+    note.className = 'chat-note';
+    note.textContent = text;
+    els.chatMessages.appendChild(note);
+    scrollChatToBottom(true);
+  }
+
+  function appendChatError(message) {
+    els.chatEmpty.hidden = true;
+    const row = document.createElement('div');
+    row.className = 'chat-msg chat-msg-ai';
+
+    const avatar = document.createElement('div');
+    avatar.className = 'chat-msg-avatar';
+    avatar.setAttribute('aria-hidden', 'true');
+    avatar.textContent = '🥺';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-bubble chat-error';
+    bubble.textContent = message;
+
+    row.append(avatar, bubble);
+    els.chatMessages.appendChild(row);
+    scrollChatToBottom(true);
+  }
+
+  function scrollChatToBottom(smooth) {
+    els.chatMessages.scrollTo({
+      top: els.chatMessages.scrollHeight,
+      behavior: smooth ? 'smooth' : 'auto'
+    });
+  }
+
+  function isChatNearBottom() {
+    const el = els.chatMessages;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 90;
+  }
+
+  function abortChat() {
+    if (!state.chatAbort) return;
+    try {
+      state.chatAbort.abort();
+    } catch (err) {
+      /* ignore */
+    }
+  }
+
+  async function sendChat(question) {
+    if (state.chatStreaming) {
+      abortChat();
+      return;
+    }
+
+    const text = String(question || '').trim();
+    if (!text) return;
+
+    if (state.busy) {
+      openChat();
+      appendChatNote('小肥鱼还在备课，等课程生成完再问哦～');
+      return;
+    }
+
+    const settings = readSettings();
+    const problem = validateSettings(settings);
+    if (problem) {
+      openChat();
+      appendChatNote('先在左侧填好 API 设置，小肥鱼才能回答哦。');
+      setStatus(problem, false, true);
+      toast(problem, 4200);
+      return;
+    }
+
+    openChat();
+    els.chatEmpty.hidden = true;
+    els.chatInput.value = '';
+    autoGrowChatInput();
+    appendUserChatMessage(text);
+    const assistant = appendAssistantMessage();
+    scrollChatToBottom(true);
+
+    const runId = state.chatRunId + 1;
+    state.chatRunId = runId;
+    const controller = new AbortController();
+    state.chatAbort = controller;
+    state.chatStreaming = true;
+    updateChatControls();
+
+    const requestMessages = buildChatRequestMessages(text);
+    state.chatHistory.push({ role: 'user', content: text });
+    trimChatHistory();
+
+    let timedOut = false;
+    const timeoutTimer = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, CONFIG.chatTimeoutMs);
+
+    try {
+      const answer = await streamChatCompletion(
+        settings,
+        requestMessages,
+        (piece, fullText) => {
+          if (runId !== state.chatRunId) return;
+          assistant.content = fullText;
+          scheduleChatMessageRender(assistant);
+        },
+        controller.signal
+      );
+
+      if (runId !== state.chatRunId) return;
+      assistant.content = answer;
+      renderChatMessage(assistant, false);
+      state.chatHistory.push({ role: 'assistant', content: answer });
+      trimChatHistory();
+    } catch (err) {
+      if (runId !== state.chatRunId) return;
+
+      if (err && err.name === 'AbortError') {
+        if (timedOut) {
+          if (assistant.content.trim()) {
+            renderChatMessage(assistant, false);
+          } else {
+            assistant.el.remove();
+          }
+          appendChatError('请求超时了，可能是网络太慢或服务商没有响应。可以再问一次试试。');
+        } else {
+          if (assistant.content.trim()) {
+            renderChatMessage(assistant, false);
+            state.chatHistory.push({ role: 'assistant', content: assistant.content });
+            trimChatHistory();
+          } else {
+            assistant.el.remove();
+          }
+          appendChatNote('已停止回答');
+        }
+      } else if (assistant.content.trim()) {
+        renderChatMessage(assistant, false);
+        appendChatError(humanError(err));
+      } else {
+        assistant.el.remove();
+        appendChatError(humanError(err));
+      }
+    } finally {
+      window.clearTimeout(timeoutTimer);
+      if (runId === state.chatRunId) {
+        state.chatStreaming = false;
+        state.chatAbort = null;
+        updateChatControls();
+        if (isChatNearBottom()) scrollChatToBottom(true);
+        if (!els.chatPanel.hidden) els.chatInput.focus();
+        if (els.chatPanel.hidden) markChatUnread();
+      }
+    }
+  }
+
+  function trimChatHistory() {
+    if (state.chatHistory.length > 16) {
+      state.chatHistory = state.chatHistory.slice(-16);
+    }
+  }
+
+  function buildChatRequestMessages(question) {
+    const selected = [];
+    let budget = 6000;
+    for (let i = state.chatHistory.length - 1; i >= 0 && selected.length < 12; i -= 1) {
+      const item = state.chatHistory[i];
+      if (item.content.length > budget) break;
+      selected.unshift({ role: item.role, content: item.content });
+      budget -= item.content.length;
+    }
+    return [
+      { role: 'system', content: buildChatSystemPrompt() },
+      ...selected,
+      { role: 'user', content: question }
+    ];
+  }
+
+  function buildChatSystemPrompt() {
+    const languageRule = state.chatLang === 'bilingual'
+      ? '用英文作为主体回答，每个英文段落后附上对应的中文翻译；关键术语保持中英对照。'
+      : '用简体中文回答；学术术语第一次出现时保留英文原词，并在括号中给出中文解释。';
+
+    return [
+      '你是“小肥鱼”，一位温柔、耐心、严谨的双语学习助教，正在陪学生阅读下面的学习资料，并随时回答学生的问题。',
+      '',
+      '【回答语言】' + languageRule,
+      '【回答方式】',
+      '1. 像面对面辅导：先给结论，再用短段落或项目符号解释，必要时举一个例子。',
+      '2. 使用轻量 Markdown：短段落、项目符号、**加粗关键词**；不要使用表格、LaTeX 公式或代码块。',
+      '3. 一般回答 150–400 字（双语模式约 100–250 个英文词）；除非学生明确要求展开。',
+      '4. 优先依据资料回答；如果资料里没有直接讲到，先说明“资料里没有直接讲到”，再用通用知识补充。',
+      '5. 不要编造资料中的页码、数据或引用；不确定时就说不确定。',
+      '6. 与资料无关的问题也可以正常回答。',
+      '',
+      '【当前资料】',
+      buildTutorContext()
+    ].join('\n');
+  }
+
+  function buildTutorContext() {
+    const parts = [];
+    if (state.sourceLabel) parts.push('资料名称：' + state.sourceLabel);
+
+    if (state.lesson) {
+      const titleParts = [];
+      if (state.lesson.title.en) titleParts.push(state.lesson.title.en);
+      if (state.lesson.title.zh) titleParts.push(state.lesson.title.zh);
+      parts.push('【课程标题】' + (titleParts.join(' / ') || '未命名课程'));
+
+      const lessonLines = [];
+      for (const section of state.lesson.sections) {
+        if (section.heading.en) {
+          lessonLines.push(
+            '## ' + section.heading.en +
+            (section.heading.zh ? '（' + section.heading.zh + '）' : '')
+          );
+        }
+        for (const paragraph of section.paragraphs) {
+          if (paragraph.en) lessonLines.push(paragraph.en);
+        }
+      }
+      const lessonText = truncateText(lessonLines.join('\n\n'), 12000);
+      if (lessonText) parts.push('【课程讲义（英文主体）】\n' + lessonText);
+    }
+
+    const terms = [...state.registry.values()];
+    if (terms.length) {
+      const termLines = terms.slice(0, 60).map((item) => {
+        const definition = item.definition_zh || item.definition_en || '';
+        return '- ' + item.term +
+          (item.zh ? '（' + item.zh + '）' : '') +
+          (definition ? '：' + definition : '');
+      });
+      parts.push('【术语表】\n' + termLines.join('\n'));
+    }
+
+    if (state.text) {
+      const sourceExcerpt = truncateText(state.text, 6000);
+      parts.push(
+        '【原始资料节选】\n' + sourceExcerpt +
+        (state.text.length > 6000 ? '\n……（节选结束）' : '')
+      );
+    }
+
+    if (!parts.length) parts.push('学生还没有上传学习资料。');
+    return parts.join('\n\n');
+  }
+
+  function truncateText(text, limit) {
+    const value = String(text || '');
+    if (value.length <= limit) return value;
+    return value.slice(0, limit).trimEnd() + '…';
+  }
+
+  async function streamChatCompletion(settings, messages, onDelta, signal) {
+    const url = buildEndpoint(settings.baseUrl);
+    const headers = { 'Content-Type': 'application/json' };
+    if (settings.apiKey) headers.Authorization = 'Bearer ' + settings.apiKey;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: settings.model,
+        messages,
+        temperature: 0.35,
+        max_tokens: CONFIG.chatMaxTokens,
+        stream: true
+      }),
+      signal
+    });
+
+    if (!response.ok) throw await apiError(response);
+
+    const contentType = (response.headers.get('content-type') || '').toLowerCase();
+
+    if (!contentType.includes('text/event-stream')) {
+      const raw = await response.text();
+      let data = null;
+      try {
+        data = JSON.parse(raw);
+      } catch (err) {
+        data = null;
+      }
+      const content = extractMessageContent(
+        data && data.choices && data.choices[0] && data.choices[0].message
+      );
+      if (!content) {
+        throw new Error('接口返回了无法识别的格式。请确认该服务兼容 OpenAI Chat Completions 协议，并支持流式输出。');
+      }
+      onDelta(content, content);
+      return content;
+    }
+
+    if (!response.body) {
+      throw new Error('浏览器无法读取流式响应，请更换浏览器后再试。');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullText = '';
+    let finished = false;
+
+    const handleDataLine = (rawLine) => {
+      const line = rawLine.trim();
+      if (!line || line.startsWith(':') || !line.startsWith('data:')) return;
+      const payloadText = line.slice(5).trim();
+      if (!payloadText) return;
+      if (payloadText === '[DONE]') {
+        finished = true;
+        return;
+      }
+
+      let payload = null;
+      try {
+        payload = JSON.parse(payloadText);
+      } catch (err) {
+        return;
+      }
+
+      const choice = payload && payload.choices && payload.choices[0];
+      if (!choice) return;
+      const delta = choice.delta || choice.message || {};
+      let piece = '';
+
+      if (typeof delta.content === 'string') {
+        piece = delta.content;
+      } else if (Array.isArray(delta.content)) {
+        piece = delta.content.map((part) => {
+          if (typeof part === 'string') return part;
+          if (part && typeof part.text === 'string') return part.text;
+          return '';
+        }).join('');
+      }
+
+      if (piece) {
+        fullText += piece;
+        onDelta(piece, fullText);
+      }
+    };
+
+    try {
+      while (!finished) {
+        const result = await reader.read();
+        if (result.done) break;
+        buffer += decoder.decode(result.value, { stream: true });
+
+        let newlineIndex = buffer.indexOf('\n');
+        while (newlineIndex !== -1) {
+          const rawLine = buffer.slice(0, newlineIndex).replace(/\r$/, '');
+          buffer = buffer.slice(newlineIndex + 1);
+          handleDataLine(rawLine);
+          if (finished) break;
+          newlineIndex = buffer.indexOf('\n');
+        }
+      }
+      buffer += decoder.decode();
+      if (buffer.trim() && !finished) handleDataLine(buffer);
+    } finally {
+      try {
+        await reader.cancel();
+      } catch (err) {
+        /* ignore */
+      }
+    }
+
+    if (!fullText.trim()) {
+      throw new Error('模型没有返回任何内容。请确认模型支持流式输出，或换一个模型再试。');
+    }
+    return fullText;
+  }
+
   /* ---------------- 演示 ---------------- */
 
   function loadDemo() {
@@ -1361,6 +2159,7 @@
     els.welcome.hidden = true;
     els.lesson.hidden = false;
     renderLesson(lesson);
+    resetChat();
     setStatus('演示课程已载入：悬停绿色词、点击后文术语试试看～', false);
   }
 
