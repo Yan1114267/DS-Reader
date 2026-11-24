@@ -22,7 +22,7 @@
   };
 
   const STORE_KEY = 'whale-tutor-settings-v1';
-  const PDF_WORKER_URL = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  const PDF_WORKER_URL = 'vendor/pdf.worker.min.js';
 
   const SYSTEM_PROMPT = `你是一位温柔、耐心又严谨的双语讲师，负责根据学生上传的课件、论文或讲义片段，写出一节循序渐进的微型课程。
 

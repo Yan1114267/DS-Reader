@@ -74,7 +74,7 @@ python -m http.server 8080
 - 文件内容会作为提示词发送给你选择的 AI 服务商，请注意资料本身的保密要求。
 
 **Q：需要联网吗？**
-AI 调用需要联网；页面上的 PDF / DOCX / PPTX 解析库从 CDN 加载，第一次使用也需要联网。演示模式只依赖本地文件。
+只有调用 AI 时需要联网。PDF / DOCX / PPTX 解析库已经随项目附带在 `vendor/` 目录，演示模式和文件解析都可以离线使用。
 
 ---
 
@@ -85,8 +85,15 @@ whale-tutor/
 ├── index.html   # 页面结构
 ├── styles.css   # 界面样式
 ├── app.js       # 文件解析、API 调用、术语标注与跳转
+├── vendor/      # 随项目附带的解析库
+│   ├── pdf.min.js
+│   ├── pdf.worker.min.js
+│   ├── mammoth.browser.min.js
+│   └── jszip.min.js
 └── README.md
 ```
+
+解析库许可：pdf.js（Apache-2.0）、mammoth.js（BSD-2-Clause）、JSZip（MIT / GPLv3 双许可）。
 
 ## 可自定义的地方（app.js 顶部）
 
