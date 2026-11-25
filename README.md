@@ -67,6 +67,11 @@
 **Q：点「识别模型」失败或没有下拉选项？**
 识别模型调用的是 OpenAI 兼容的 `GET /models` 接口。部分服务商不提供该接口，或不允许浏览器跨域访问（CORS）；这种情况下直接手动填写模型名称即可，不影响正常备课。本地 Ollama 需要先 `ollama pull` 模型，Key 可以留空。
 
+**Q：用 deepseek-flash 时提示「第 1 段返回的内容不是有效 JSON」？**
+DeepSeek V4 / Flash 默认开启思考模式，思考产生的 `reasoning_content` 会占用 `max_tokens`。本项目每段要输出较长的中英双语 JSON，原来的 4096 token 很容易被思考过程吃掉，`finish_reason` 变成 `length`，JSON 就被截断；JSON 模式下服务商还可能把不完整的 JSON 替换成空格，所以前端会报“不是有效 JSON”。新版已为 DeepSeek 请求自动关闭思考模式，并把每段 `maxTokens` 提到 8192；若服务商不支持 `thinking` 参数，会自动退回兼容请求。
+
+另外，本项目不会把 PDF 原文件直接上传给模型：它先在浏览器里用 pdf.js 提取文字，再按段调用 `/chat/completions`。DeepSeek 网页端“支持 PDF”走的是 Files API（先上传文件，再在对话里引用 `file_id`），和这里纯前端调用不是同一条路径；所以“模型支持 PDF”并不代表它一定能顺利处理本项目的长文本 JSON 任务。
+
 **Q：双击打开后，调用接口报「网络请求失败 / CORS」？**
 浏览器直连 API 时，服务商必须允许跨域（CORS）。如果服务商不支持，可更换服务商，或使用本地 Ollama。另外也可以在项目文件夹运行：
 
@@ -148,7 +153,7 @@ whale-tutor/
 const CONFIG = {
   chunkSize: 9000,   // 每次送给模型的材料字符数
   maxChunks: 8,      // 单次备课最多生成几段
-  maxTokens: 4096,   // 每段回答的最大 token 数
+  maxTokens: 8192,   // 每段回答的最大 token 数（思考模式会占用输出额度）
   temperature: 0.4
 };
 ```

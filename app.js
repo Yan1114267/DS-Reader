@@ -10,7 +10,7 @@
   const CONFIG = {
     chunkSize: 9000,           // 每次送给模型的材料字符数
     maxChunks: 8,              // 单次备课最多生成几段
-    maxTokens: 4096,           // 每段回答的最大 token 数
+    maxTokens: 8192,           // 每段回答的最大 token 数（DeepSeek 思考模式会占用输出额度）
     temperature: 0.4,
     requestTimeoutMs: 180000,
     chatMaxTokens: 2048,       // 答疑回答的最大 token 数
@@ -1462,7 +1462,7 @@
     const headers = { 'Content-Type': 'application/json' };
     if (settings.apiKey) headers.Authorization = 'Bearer ' + settings.apiKey;
 
-    const body = {
+    const baseBody = {
       model: settings.model,
       messages: [
         { role: 'system', content: systemPrompt },
@@ -1472,35 +1472,72 @@
       max_tokens: CONFIG.maxTokens
     };
 
+    // DeepSeek V4 / flash 默认开启思考模式，推理 token 会占用 max_tokens，
+    // 很容易把 JSON 正文截断。这里主动关闭思考；其他服务商收不到这个字段。
+    const isDeepSeek = /deepseek/i.test(String(settings.model || '')) ||
+      /deepseek\.com/i.test(String(settings.baseUrl || ''));
+    const variants = [];
+    if (isDeepSeek) {
+      variants.push({ thinking: true, json: true });
+      variants.push({ thinking: true, json: false });
+    }
+    variants.push({ json: true });
+    variants.push({ json: false });
+    if (CONFIG.maxTokens > 4096) {
+      // 兼容只允许较小输出额度的服务商
+      variants.push({ json: false, maxTokens: 4096 });
+    }
+
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), CONFIG.requestTimeoutMs);
 
     try {
-      let response = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(Object.assign({}, body, { response_format: { type: 'json_object' } })),
-        signal: controller.signal
-      });
+      let result = null;
+      let lastProblem = '';
 
-      if (response.status === 400) {
-        // 有些服务商不支持 response_format，去掉后重试一次
-        response = await fetch(url, {
+      for (let i = 0; i < variants.length; i += 1) {
+        const variant = variants[i];
+        const payload = Object.assign({}, baseBody);
+        if (variant.maxTokens) payload.max_tokens = variant.maxTokens;
+        if (variant.thinking) {
+          payload.thinking = { type: 'disabled' };
+          payload.reasoning_effort = 'none';
+        }
+        if (variant.json) payload.response_format = { type: 'json_object' };
+
+        const response = await fetch(url, {
           method: 'POST',
           headers,
-          body: JSON.stringify(body),
+          body: JSON.stringify(payload),
           signal: controller.signal
         });
+
+        if (!response.ok) {
+          if (response.status !== 400 || i === variants.length - 1) {
+            throw await apiError(response);
+          }
+          continue; // 可能不支持 JSON 模式 / thinking / 这个 max_tokens，换下一组参数
+        }
+
+        const data = await response.json();
+        const choice = data && data.choices && data.choices[0];
+        const content = extractMessageContent(choice && choice.message);
+
+        if (choice && choice.finish_reason === 'length') {
+          throw new Error('模型输出达到 max_tokens 上限被截断（finish_reason=length），JSON 不完整。可以再试一次，或把资料拆小一点。');
+        }
+        if (!content || !content.trim()) {
+          lastProblem = '模型返回内容为空。开启 JSON 模式时，非 JSON 输出可能被服务商替换成空格；可以再试一次或换一个模型。';
+          if (i === variants.length - 1) throw new Error(lastProblem);
+          continue;
+        }
+
+        result = { content, finishReason: (choice && choice.finish_reason) || '' };
+        break;
       }
 
-      if (!response.ok) throw await apiError(response);
-
-      const data = await response.json();
-      const content = extractMessageContent(data && data.choices && data.choices[0] && data.choices[0].message);
-      if (!content) {
-        throw new Error('接口返回内容为空。请确认模型名称有效，且该服务兼容 OpenAI Chat Completions 协议。');
-      }
-      return content;
+      if (!result) throw new Error(lastProblem || '模型没有返回可用内容。');
+      return result;
     } catch (err) {
       if (err && err.name === 'AbortError') {
         throw new Error('请求超时（3 分钟）。可以把文档分小一点，或换一个更快的模型。');
@@ -1750,14 +1787,20 @@
           Math.round(6 + (i / chunks.length) * 86),
           '第 ' + (i + 1) + ' / ' + chunks.length + ' 段 · 英文讲解 + 中文翻译'
         );
-        const raw = await callChat(
+        const reply = await callChat(
           settings,
           lessonSystemPrompt,
           buildUserPrompt(chunks[i], i, chunks.length, state.sourceLabel)
         );
-        const data = parseLessonJson(raw);
+        const data = parseLessonJson(reply.content);
         if (!data) {
-          throw new Error('第 ' + (i + 1) + ' 段返回的内容不是有效 JSON。可能是模型不支持 JSON 输出，请换一个模型再试。');
+          const preview = String(reply.content || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+          throw new Error(
+            '第 ' + (i + 1) + ' 段返回的内容不是有效 JSON（finish_reason=' +
+            (reply.finishReason || '未知') + '）。' +
+            (preview ? '返回开头：' + preview + ' ' : '') +
+            '可以再试一次，或换一个更擅长 JSON 输出的模型。'
+          );
         }
         mergeLessonData(merged, data);
       }
