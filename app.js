@@ -163,6 +163,8 @@
   const els = {
     baseUrl: $('baseUrl'),
     model: $('model'),
+    modelToggle: $('modelToggle'),
+    modelList: $('modelList'),
     fetchModelsBtn: $('fetchModelsBtn'),
     modelOptions: $('modelOptions'),
     modelHint: $('modelHint'),
@@ -224,7 +226,11 @@
     chatRunId: 0,
     modelsFetchKey: '',
     modelsAttempt: { key: '', time: 0 },
-    modelsLoading: false
+    modelsLoading: false,
+    models: [],
+    modelFiltering: false,
+    modelActive: -1,
+    openModelListAfterFetch: false
   };
 
   let activeTermEl = null;
@@ -246,8 +252,38 @@
     [els.baseUrl, els.model, els.apiKey, els.visionModel].forEach((input) => {
       input.addEventListener('input', persistSettings);
     });
-    els.fetchModelsBtn.addEventListener('click', () => fetchAvailableModels({ silent: false }));
-    els.model.addEventListener('focus', maybeAutoFetchModels);
+    els.fetchModelsBtn.addEventListener('click', () => {
+      state.openModelListAfterFetch = true;
+      fetchAvailableModels({ silent: false });
+    });
+    els.model.addEventListener('focus', () => {
+      state.modelFiltering = false;
+      openModelList({ filter: false });
+    });
+    els.model.addEventListener('click', () => {
+      if (els.modelList.hidden) openModelList({ filter: false });
+    });
+    els.model.addEventListener('input', () => {
+      state.modelFiltering = true;
+      state.modelActive = -1;
+      if (els.modelList.hidden) openModelList({ filter: true });
+      else renderModelList();
+    });
+    els.model.addEventListener('keydown', handleModelKeydown);
+    els.modelToggle.addEventListener('mousedown', (event) => event.preventDefault());
+    els.modelToggle.addEventListener('click', () => {
+      if (els.modelList.hidden) {
+        els.model.focus();
+        openModelList({ filter: false });
+      } else {
+        closeModelList();
+      }
+    });
+    document.addEventListener('pointerdown', (event) => {
+      if (els.modelList.hidden) return;
+      if (event.target instanceof Element && event.target.closest('.model-combo')) return;
+      closeModelList();
+    });
     els.apiKey.addEventListener('change', maybeAutoFetchModels);
     els.baseUrl.addEventListener('change', maybeAutoFetchModels);
     els.rememberKey.addEventListener('change', persistSettings);
@@ -431,6 +467,8 @@
   }
 
   function applyModelOptions(ids) {
+    state.models = ids.slice();
+
     els.modelOptions.textContent = '';
     const fragment = document.createDocumentFragment();
     ids.forEach((id) => {
@@ -439,6 +477,140 @@
       fragment.appendChild(option);
     });
     els.modelOptions.appendChild(fragment);
+
+    if (!els.modelList.hidden) renderModelList();
+  }
+
+  function visibleModelIds() {
+    if (!state.modelFiltering) return state.models;
+    const query = els.model.value.trim().toLowerCase();
+    if (!query) return state.models;
+    return state.models.filter((id) => id.toLowerCase().includes(query));
+  }
+
+  function setModelListExpanded(open) {
+    const value = open ? 'true' : 'false';
+    els.modelToggle.setAttribute('aria-expanded', value);
+    els.model.setAttribute('aria-expanded', value);
+  }
+
+  function renderModelList() {
+    els.modelList.textContent = '';
+    els.model.removeAttribute('aria-activedescendant');
+
+    if (!state.models.length) {
+      const empty = document.createElement('li');
+      empty.className = 'model-list-empty';
+      empty.textContent = state.modelsLoading
+        ? '正在识别可用模型…'
+        : '还没有识别到模型，点「识别模型」试一次，或直接手填。';
+      els.modelList.appendChild(empty);
+      state.modelActive = -1;
+      return;
+    }
+
+    const ids = visibleModelIds();
+    if (!ids.length) {
+      const empty = document.createElement('li');
+      empty.className = 'model-list-empty';
+      empty.textContent = '没有匹配的模型，可直接手填。';
+      els.modelList.appendChild(empty);
+      state.modelActive = -1;
+      return;
+    }
+    if (state.modelActive >= ids.length) state.modelActive = -1;
+
+    const current = els.model.value.trim();
+    ids.forEach((id, index) => {
+      const option = document.createElement('li');
+      option.className = 'model-option';
+      option.id = 'modelOption-' + index;
+      option.dataset.value = id;
+      option.textContent = id;
+      option.title = id;
+      option.setAttribute('role', 'option');
+      option.setAttribute('aria-selected', id === current ? 'true' : 'false');
+      if (id === current) option.classList.add('selected');
+      if (index === state.modelActive) {
+        option.classList.add('active');
+        els.model.setAttribute('aria-activedescendant', option.id);
+      }
+      option.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        selectModel(id);
+      });
+      els.modelList.appendChild(option);
+    });
+  }
+
+  function openModelList(options) {
+    const opts = options || {};
+    const wasHidden = els.modelList.hidden;
+    if (opts.filter !== undefined) state.modelFiltering = Boolean(opts.filter);
+    if (wasHidden) state.modelActive = -1;
+
+    els.modelList.hidden = false;
+    setModelListExpanded(true);
+
+    if (wasHidden && !state.modelFiltering) {
+      const index = state.models.indexOf(els.model.value.trim());
+      if (index >= 0) state.modelActive = index;
+    }
+
+    renderModelList();
+    maybeAutoFetchModels();
+  }
+
+  function closeModelList() {
+    els.modelList.hidden = true;
+    setModelListExpanded(false);
+    state.modelActive = -1;
+    els.model.removeAttribute('aria-activedescendant');
+  }
+
+  function selectModel(id) {
+    els.model.value = id;
+    persistSettings();
+    closeModelList();
+  }
+
+  function moveModelActive(step) {
+    const ids = visibleModelIds();
+    if (!ids.length) return;
+    if (state.modelActive < 0 || state.modelActive >= ids.length) {
+      state.modelActive = step > 0 ? 0 : ids.length - 1;
+    } else {
+      state.modelActive = (state.modelActive + step + ids.length) % ids.length;
+    }
+    renderModelList();
+    const active = els.modelList.querySelector('.model-option.active');
+    if (active && active.scrollIntoView) active.scrollIntoView({ block: 'nearest' });
+  }
+
+  function handleModelKeydown(event) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (els.modelList.hidden) openModelList({ filter: false });
+      moveModelActive(event.key === 'ArrowDown' ? 1 : -1);
+      return;
+    }
+    if (event.key === 'Enter') {
+      if (els.modelList.hidden) return;
+      const ids = visibleModelIds();
+      if (state.modelActive >= 0 && ids[state.modelActive]) {
+        event.preventDefault();
+        selectModel(ids[state.modelActive]);
+      } else {
+        closeModelList();
+      }
+      return;
+    }
+    if (event.key === 'Escape' && !els.modelList.hidden) {
+      event.preventDefault();
+      closeModelList();
+    } else if (event.key === 'Tab') {
+      closeModelList();
+    }
   }
 
   function updateModelFetchButton(loading) {
@@ -473,19 +645,27 @@
 
     const settings = readSettings();
     if (!settings.baseUrl) {
+      state.openModelListAfterFetch = false;
       if (!silent) showModelHint('请先填写接口地址 Base URL。', true);
       return;
     }
     if (!/^https?:\/\//i.test(settings.baseUrl)) {
+      state.openModelListAfterFetch = false;
       if (!silent) showModelHint('接口地址要以 http:// 或 https:// 开头。', true);
       return;
     }
     if (!settings.apiKey && !isLocalBaseUrl(settings.baseUrl)) {
+      state.openModelListAfterFetch = false;
       if (!silent) showModelHint('先填上 API Key，大鲸鱼才能替你问服务商有哪些模型哦。', true);
       return;
     }
 
     state.modelsLoading = true;
+    const key = settingsFingerprint(settings);
+    if (state.modelsFetchKey !== key) {
+      state.modelsFetchKey = '';
+      applyModelOptions([]);
+    }
     updateModelFetchButton(true);
     if (!silent) showModelHint('正在向服务商查询可用模型…', false);
 
@@ -507,14 +687,21 @@
 
       applyModelOptions(ids);
       state.modelsFetchKey = settingsFingerprint(settings);
-      showModelHint('已识别 ' + ids.length + ' 个模型，点开「模型名称」输入框就能选。', false);
+      showModelHint('已识别 ' + ids.length + ' 个模型，点一下「模型名称」就能展开选择。', false);
       if (!els.model.value.trim() && ids.length === 1) {
         els.model.value = ids[0];
         persistSettings();
       }
       if (!silent) toast('已识别 ' + ids.length + ' 个可用模型～');
+
+      const shouldOpen = state.openModelListAfterFetch || document.activeElement === els.model;
+      state.openModelListAfterFetch = false;
+      if (shouldOpen) {
+        state.modelFiltering = false;
+        openModelList({ filter: false });
+      }
     } catch (err) {
-      const key = settingsFingerprint(settings);
+      state.openModelListAfterFetch = false;
       state.modelsAttempt = { key, time: Date.now() };
       if (state.modelsFetchKey !== key) {
         state.modelsFetchKey = '';
@@ -533,6 +720,7 @@
       window.clearTimeout(timer);
       state.modelsLoading = false;
       updateModelFetchButton(false);
+      if (!els.modelList.hidden) renderModelList();
     }
   }
 

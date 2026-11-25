@@ -33,7 +33,11 @@
         <div class="field">
           <label for="model">模型名称</label>
           <div class="model-picker">
-            <input id="model" type="text" list="modelOptions" autocomplete="off" spellcheck="false" placeholder="deepseek-chat" aria-describedby="modelHint" />
+            <div class="model-combo">
+              <input id="model" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="modelList" aria-haspopup="listbox" aria-describedby="modelHint" autocomplete="off" spellcheck="false" placeholder="deepseek-chat" />
+              <button id="modelToggle" class="model-toggle" type="button" tabindex="-1" aria-label="展开可用模型列表" aria-expanded="false">▾</button>
+              <ul id="modelList" class="model-list" role="listbox" aria-label="可用模型" hidden></ul>
+            </div>
             <button id="fetchModelsBtn" class="model-fetch" type="button" title="根据接口地址和 API Key 查询可用模型">识别模型</button>
           </div>
           <datalist id="modelOptions"></datalist>
