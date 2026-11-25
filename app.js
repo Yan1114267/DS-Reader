@@ -16,7 +16,8 @@
     chatMaxTokens: 2048,       // 答疑回答的最大 token 数
     chatTimeoutMs: 180000,
     maxOcrImages: 20,          // 每个文件最多识别多少张图片
-    maxOcrPdfPages: 12         // 扫描版 PDF 最多 OCR 多少页
+    maxOcrPdfPages: 12,        // 扫描版 PDF 最多 OCR 多少页
+    scopeCharBudget: 12000     // 关键词筛选时最多发送多少字符
   };
 
   const PRESETS = {
@@ -179,6 +180,17 @@
     fileBadge: $('fileBadge'),
     fileName: $('fileName'),
     fileMeta: $('fileMeta'),
+    scopePanel: $('scopePanel'),
+    scopeBadge: $('scopeBadge'),
+    scopePageFields: $('scopePageFields'),
+    scopeChapterField: $('scopeChapterField'),
+    scopeChapter: $('scopeChapter'),
+    scopeStart: $('scopeStart'),
+    scopeEnd: $('scopeEnd'),
+    scopeStartLabel: $('scopeStartLabel'),
+    scopeEndLabel: $('scopeEndLabel'),
+    scopeKeyword: $('scopeKeyword'),
+    scopeHint: $('scopeHint'),
     startBtn: $('startBtn'),
     status: $('status'),
     statusSpinner: $('statusSpinner'),
@@ -230,12 +242,21 @@
     models: [],
     modelFiltering: false,
     modelActive: -1,
-    openModelListAfterFetch: false
+    openModelListAfterFetch: false,
+    docKind: '',
+    pdfPages: [],
+    pdfOutline: [],
+    pageCount: 0,
+    slideTexts: [],
+    slideCount: 0,
+    scopeLabel: '',
+    scopeText: ''
   };
 
   let activeTermEl = null;
   let toastTimer = 0;
   let pdfWorkerPromise = null;
+  let scopeHintTimer = 0;
 
   /* ---------------- 初始化 ---------------- */
 
@@ -318,6 +339,10 @@
       const file = els.fileInput.files && els.fileInput.files[0];
       if (file) handleFile(file);
     });
+    els.scopeChapter.addEventListener('change', handleScopeChapterChange);
+    els.scopeStart.addEventListener('input', handleScopeRangeInput);
+    els.scopeEnd.addEventListener('input', handleScopeRangeInput);
+    els.scopeKeyword.addEventListener('input', scheduleScopeHint);
 
     ['dragenter', 'dragover'].forEach((type) => {
       els.dropZone.addEventListener(type, (event) => {
@@ -863,6 +888,15 @@
     state.ocrCount = 0;
     state.ocrWarning = '';
     state.sourceLabel = file.name;
+    state.docKind = ext;
+    state.pdfPages = [];
+    state.pdfOutline = [];
+    state.pageCount = 0;
+    state.slideTexts = [];
+    state.slideCount = 0;
+    state.scopeLabel = '';
+    state.scopeText = '';
+    hideScopePanel();
     els.startBtn.disabled = true;
     showFileCard(file, '正在解析…');
 
@@ -874,10 +908,11 @@
         throw new Error('没有提取到可阅读的文字。可以勾选「识别图片里的文字」并使用支持视觉的模型，或先对扫描件做 OCR。');
       }
       state.text = cleaned;
+      setupScopePanel(ext);
 
       const allChunks = chunkText(cleaned, CONFIG.chunkSize);
       const chunkCount = Math.min(allChunks.length, CONFIG.maxChunks);
-      let meta = formatBytes(file.size) + ' · 约 ' + cleaned.length.toLocaleString() + ' 字符 · ' + chunkCount + ' 段备课';
+      let meta = formatBytes(file.size) + ' · 约 ' + cleaned.length.toLocaleString() + ' 字符 · 最多 ' + chunkCount + ' 段';
       if (state.ocrCount) {
         meta += ' · 图片 OCR ' + state.ocrCount + ' 张';
       }
@@ -885,7 +920,7 @@
         meta += ' · 部分图片未识别';
       }
       if (allChunks.length > CONFIG.maxChunks) {
-        meta += '（文档较长，本次只讲解前 ' + CONFIG.maxChunks + ' 段）';
+        meta += '（全文超过上限，可在学习范围里只选一部分）';
       }
       showFileCard(file, meta);
       els.startBtn.disabled = false;
@@ -894,12 +929,21 @@
         setStatus('资料已就绪，但图片文字识别未完成：' + warning, false, true);
         toast('图片文字识别未完成：' + warning, 8000);
       } else {
-        setStatus('资料已就绪：可填写课程要求，或直接开始上课 🐳', false);
+        setStatus('资料已就绪：可在下方设置学习范围，或直接开始上课 🐳', false);
       }
     } catch (err) {
       console.error(err);
       state.file = null;
       state.text = '';
+      state.docKind = '';
+      state.pdfPages = [];
+      state.pdfOutline = [];
+      state.pageCount = 0;
+      state.slideTexts = [];
+      state.slideCount = 0;
+      state.scopeLabel = '';
+      state.scopeText = '';
+      hideScopePanel();
       showFileCard(file, '解析失败');
       setStatus(err.message || '解析失败，请换一个文件试试。', false, true);
       toast('文件解析失败：' + (err.message || '未知错误'), 6000);
@@ -1179,6 +1223,30 @@
     });
   }
 
+  async function flattenPdfOutline(pdf, items, level) {
+    const out = [];
+    for (const item of items || []) {
+      let page = 0;
+      try {
+        let dest = item.dest;
+        if (typeof dest === 'string') dest = await pdf.getDestination(dest);
+        if (Array.isArray(dest) && dest.length) {
+          const ref = dest[0];
+          page = typeof ref === 'number' ? ref + 1 : (await pdf.getPageIndex(ref)) + 1;
+        }
+      } catch (err) {
+        page = 0;
+      }
+      const title = String(item.title || '').replace(/\s+/g, ' ').trim();
+      if (title) out.push({ title, level, page });
+      if (item.items && item.items.length) {
+        const children = await flattenPdfOutline(pdf, item.items, level + 1);
+        out.push(...children);
+      }
+    }
+    return out;
+  }
+
   async function extractPdf(file, vision) {
     await ensurePdfWorker();
     if (!window.pdfjsLib) {
@@ -1186,6 +1254,7 @@
     }
     const data = new Uint8Array(await file.arrayBuffer());
     const pdf = await pdfjsLib.getDocument({ data }).promise;
+    state.pageCount = pdf.numPages;
     const pages = [];
     const ocrProblem = vision.enabled ? visionConfigProblem(vision) : '';
     let ocrPages = 0;
@@ -1232,6 +1301,15 @@
         await new Promise((resolve) => window.setTimeout(resolve, 0));
       }
     }
+    state.pdfPages = pages;
+    try {
+      const outline = await pdf.getOutline();
+      state.pdfOutline = outline && outline.length
+        ? await flattenPdfOutline(pdf, outline, 1)
+        : [];
+    } catch (err) {
+      state.pdfOutline = [];
+    }
     return pages.join('\n\n');
   }
 
@@ -1257,6 +1335,7 @@
     const ns = 'http://schemas.openxmlformats.org/drawingml/2006/main';
     const pNs = 'http://schemas.openxmlformats.org/presentationml/2006/main';
     const parts = [];
+    const slideParts = [];
 
     for (let i = 0; i < names.length; i += 1) {
       setStatus('正在读取第 ' + (i + 1) + '/' + names.length + ' 张幻灯片…', true);
@@ -1286,8 +1365,16 @@
         if (!lines.includes(line)) lines.push(line);
       }
 
-      if (lines.length) parts.push('[Slide ' + (i + 1) + ']\n' + lines.join('\n'));
+      if (lines.length) {
+        const part = '[Slide ' + (i + 1) + ']\n' + lines.join('\n');
+        slideParts.push(part);
+        parts.push(part);
+      } else {
+        slideParts.push('');
+      }
     }
+    state.slideTexts = slideParts;
+    state.slideCount = names.length;
 
     const mediaNames = Object.keys(zip.files).filter((name) => /^ppt\/media\//i.test(name));
     const svgNames = mediaNames.filter((name) => /\.svg$/i.test(name));
@@ -1358,6 +1445,347 @@
     }
 
     return parts.filter(Boolean).join('\n\n');
+  }
+
+  /* ---------------- 学习范围 ---------------- */
+
+  const SCOPE_STOPWORDS = new Set([
+    '我们', '你们', '他们', '这个', '那个', '这些', '那些', '以及', '可以',
+    '什么', '怎么', '如何', '其中', '就是', '一个', '没有', '不是', '如果',
+    '因为', '所以', '然后', '还是', '或者', '已经', '正在', '需要', '进行',
+    '关于', '对于', '通过', '使用', '时候', '问题', '内容'
+  ]);
+
+  function hideScopePanel() {
+    els.scopePanel.hidden = true;
+    els.scopeChapter.textContent = '';
+    els.scopeStart.value = '';
+    els.scopeEnd.value = '';
+    els.scopeKeyword.value = '';
+    els.scopeHint.textContent = '留空则阅读全文；填写页码或关键词后，只把对应部分发给模型。';
+    els.scopeHint.classList.remove('error');
+    els.scopeBadge.textContent = '全文';
+    els.scopeBadge.classList.remove('error');
+  }
+
+  function setupScopePanel(ext) {
+    const kind = state.docKind || ext;
+    const paged = kind === 'pdf' || kind === 'pptx';
+    const max = kind === 'pdf' ? state.pageCount : state.slideCount;
+
+    els.scopePanel.hidden = false;
+    els.scopePageFields.hidden = !paged;
+    els.scopeChapterField.hidden = kind !== 'pdf' || !state.pdfOutline.length;
+    els.scopeStart.value = '';
+    els.scopeEnd.value = '';
+    els.scopeKeyword.value = '';
+    els.scopeStart.max = String(max || 1);
+    els.scopeEnd.max = String(max || 1);
+    els.scopeStart.placeholder = '1';
+    els.scopeEnd.placeholder = String(max || 1);
+    els.scopeStartLabel.textContent = kind === 'pdf' ? '起始页' : '起始幻灯片';
+    els.scopeEndLabel.textContent = kind === 'pdf' ? '结束页' : '结束幻灯片';
+
+    els.scopeChapter.textContent = '';
+    if (kind === 'pdf' && state.pdfOutline.length) {
+      const full = document.createElement('option');
+      full.value = '';
+      full.textContent = '全文（不限制页码）';
+      els.scopeChapter.appendChild(full);
+      const custom = document.createElement('option');
+      custom.value = 'custom';
+      custom.textContent = '自定义页码范围';
+      els.scopeChapter.appendChild(custom);
+      state.pdfOutline.forEach((item, index) => {
+        if (!item.page) return;
+        const option = document.createElement('option');
+        option.value = String(index);
+        option.textContent = '　'.repeat(Math.max(0, item.level - 1)) +
+          item.title + '（第 ' + item.page + ' 页）';
+        els.scopeChapter.appendChild(option);
+      });
+      els.scopeChapter.value = '';
+    }
+
+    updateScopeHint();
+  }
+
+  function getOutlineEndPage(index) {
+    const item = state.pdfOutline[index];
+    if (!item || !item.page) return 0;
+    for (let i = index + 1; i < state.pdfOutline.length; i += 1) {
+      const next = state.pdfOutline[i];
+      if (next.page && next.level <= item.level) {
+        return Math.max(item.page, next.page - 1);
+      }
+    }
+    return state.pageCount || item.page;
+  }
+
+  function handleScopeChapterChange() {
+    const value = els.scopeChapter.value;
+    if (value === '') {
+      els.scopeStart.value = '';
+      els.scopeEnd.value = '';
+    } else if (value === 'custom') {
+      els.scopeStart.focus();
+    } else {
+      const index = Number(value);
+      const item = state.pdfOutline[index];
+      if (item && item.page) {
+        els.scopeStart.value = String(item.page);
+        els.scopeEnd.value = String(getOutlineEndPage(index));
+      }
+    }
+    updateScopeHint();
+  }
+
+  function handleScopeRangeInput() {
+    const hasStart = Boolean(els.scopeStart.value.trim());
+    const hasEnd = Boolean(els.scopeEnd.value.trim());
+    if (!hasStart && !hasEnd) {
+      els.scopeChapter.value = '';
+    } else if (els.scopeChapter.value !== '' && els.scopeChapter.value !== 'custom') {
+      els.scopeChapter.value = 'custom';
+    }
+    updateScopeHint();
+  }
+
+  function scheduleScopeHint() {
+    window.clearTimeout(scopeHintTimer);
+    scopeHintTimer = window.setTimeout(updateScopeHint, 180);
+  }
+
+  function readScopeRange() {
+    if (state.docKind !== 'pdf' && state.docKind !== 'pptx') return { range: null };
+    const startRaw = els.scopeStart.value.trim();
+    const endRaw = els.scopeEnd.value.trim();
+    if (!startRaw && !endRaw) return { range: null };
+
+    const word = state.docKind === 'pdf' ? '页' : '幻灯片';
+    const max = state.docKind === 'pdf' ? state.pageCount : state.slideCount;
+    if (!startRaw || !endRaw) {
+      return { error: '页码范围要同时填写起始' + word + '和结束' + word + '。' };
+    }
+    const start = Number(startRaw);
+    const end = Number(endRaw);
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < 1) {
+      return { error: '页码要填写正整数。' };
+    }
+    if (!max || start > max || end > max) {
+      return { error: '页码范围不能超过 ' + max + ' ' + word + '。' };
+    }
+    if (start > end) {
+      return { error: '起始' + word + '不能大于结束' + word + '。' };
+    }
+    return { range: { start, end } };
+  }
+
+  function buildSearchTerms(query) {
+    const q = String(query || '').toLowerCase().trim();
+    const weighted = new Map();
+    const add = (term, weight) => {
+      const clean = String(term || '').trim();
+      if (!clean) return;
+      weighted.set(clean, Math.max(weighted.get(clean) || 0, weight));
+    };
+
+    (q.match(/[a-z0-9][a-z0-9+#._-]*/g) || []).forEach((word) => {
+      add(word, word.length >= 4 ? 3 : 2);
+    });
+
+    const runs = q.match(/[㐀-鿿]+/g) || [];
+    runs.forEach((run) => {
+      if (SCOPE_STOPWORDS.has(run)) return;
+      if (run.length <= 6) add(run, 8);
+      for (let i = 0; i < run.length - 1; i += 1) {
+        const term = run.slice(i, i + 2);
+        if (!SCOPE_STOPWORDS.has(term)) add(term, 1.2);
+      }
+      for (let i = 0; i < run.length - 2; i += 1) {
+        const term = run.slice(i, i + 3);
+        if (!SCOPE_STOPWORDS.has(term)) add(term, 2.2);
+      }
+    });
+
+    return Array.from(weighted, ([term, weight]) => ({ term, weight }));
+  }
+
+  function splitPassages(text, maxLen) {
+    const blocks = String(text || '').split(/\n{2,}/).map((item) => item.trim()).filter(Boolean);
+    const paragraphs = [];
+    blocks.forEach((block) => {
+      if (block.length <= maxLen) {
+        paragraphs.push(block);
+        return;
+      }
+      block.split(/\n+/).map((line) => line.trim()).filter(Boolean).forEach((line) => {
+        paragraphs.push(line);
+      });
+    });
+
+    const passages = [];
+    let current = '';
+    const flush = () => {
+      if (current.trim()) passages.push(current.trim());
+      current = '';
+    };
+
+    paragraphs.forEach((para) => {
+      if (para.length > maxLen) {
+        flush();
+        let rest = para;
+        while (rest.length > maxLen) {
+          let cut = rest.lastIndexOf('。', maxLen);
+          if (cut < maxLen * 0.4) cut = rest.lastIndexOf('；', maxLen);
+          if (cut < maxLen * 0.4) cut = rest.lastIndexOf(' ', maxLen);
+          if (cut < maxLen * 0.4) cut = maxLen - 1;
+          passages.push(rest.slice(0, cut + 1).trim());
+          rest = rest.slice(cut + 1).trim();
+        }
+        if (rest) current = rest;
+        return;
+      }
+      if (current && current.length + para.length + 1 > maxLen) flush();
+      current = current ? current + '\n' + para : para;
+    });
+    flush();
+    return passages;
+  }
+
+  function selectRelevantText(text, query, budget) {
+    const q = String(query || '').toLowerCase().trim();
+    const terms = buildSearchTerms(q);
+    if (!terms.length) return { text: '', matched: 0, chars: 0 };
+
+    const passages = splitPassages(text, 1400);
+    const scored = passages.map((passage, index) => {
+      const lower = passage.toLowerCase();
+      let score = 0;
+      if (q && lower.includes(q)) score += 60;
+      for (const { term, weight } of terms) {
+        let from = 0;
+        let count = 0;
+        while (count < 20) {
+          const at = lower.indexOf(term, from);
+          if (at === -1) break;
+          count += 1;
+          from = at + term.length;
+        }
+        if (count) score += count * weight;
+      }
+      return { index, score };
+    });
+
+    const hits = scored.filter((item) => item.score > 0).sort((a, b) => b.score - a.score);
+    if (!hits.length) return { text: '', matched: 0, chars: 0 };
+
+    const chosen = new Set();
+    let chars = 0;
+    const add = (index) => {
+      if (index < 0 || index >= passages.length || chosen.has(index)) return;
+      const size = passages[index].length + (chosen.size ? 2 : 0);
+      if (chosen.size && chars + size > budget) return;
+      chosen.add(index);
+      chars += size;
+    };
+
+    // 只保留与最高分同一量级的命中，避免「计算」这类常见词把所有段落都带进来
+    const minScore = Math.max(2, hits[0].score * 0.25);
+    for (const hit of hits) {
+      if (chars >= budget || hit.score < minScore) break;
+      add(hit.index);
+    }
+
+    // 命中段落的前后各补一段，尽量不把上下文切碎
+    const neighbors = [];
+    Array.from(chosen).forEach((index) => {
+      if (index > 0) neighbors.push(index - 1);
+      if (index + 1 < passages.length) neighbors.push(index + 1);
+    });
+    neighbors.sort((a, b) => a - b).forEach((index) => {
+      if (chars < budget) add(index);
+    });
+
+    const ordered = Array.from(chosen).sort((a, b) => a - b);
+    const selected = ordered.map((index) => passages[index]).join('\n\n');
+    return {
+      text: selected,
+      matched: hits.length,
+      chars: selected.length
+    };
+  }
+
+  function getScopeSelection() {
+    const keyword = els.scopeKeyword.value.trim();
+    let text = state.text;
+    let label = '';
+
+    if (state.docKind === 'pdf' || state.docKind === 'pptx') {
+      const rangeResult = readScopeRange();
+      if (rangeResult.error) return { error: rangeResult.error };
+      if (rangeResult.range) {
+        const { start, end } = rangeResult.range;
+        const pages = state.docKind === 'pdf' ? state.pdfPages : state.slideTexts;
+        text = pages.slice(start - 1, end).join('\n\n').trim();
+        const unit = state.docKind === 'pdf' ? '页' : '张幻灯片';
+        label = '第 ' + start + '–' + end + ' ' + unit;
+        if (!text) return { error: '选中的范围内没有可读文字，请换一个范围。' };
+      }
+    }
+
+    if (keyword) {
+      if (keyword.length < 2) {
+        return { error: '关键词至少写 2 个字；内容较长时可以拆成几个词。' };
+      }
+      const result = selectRelevantText(text, keyword, CONFIG.scopeCharBudget);
+      if (!result.text) {
+        return { error: '没有找到包含「' + keyword + '」的内容，请换一个关键词或清空学习范围。' };
+      }
+      text = result.text;
+      label = label ? label + ' · 关键词「' + keyword + '」' : '关键词「' + keyword + '」';
+    }
+
+    if (!text || text.length < 20) {
+      return { error: '当前学习范围里的文字太少，换一个范围试试。' };
+    }
+    return { text, label, chars: text.length };
+  }
+
+  function updateScopeHint() {
+    if (els.scopePanel.hidden) return;
+    const result = getScopeSelection();
+    if (result.error) {
+      state.scopeText = '';
+      state.scopeLabel = '';
+      els.scopeHint.textContent = result.error;
+      els.scopeHint.title = result.error;
+      els.scopeHint.classList.add('error');
+      els.scopeBadge.textContent = '范围无效';
+      els.scopeBadge.classList.add('error');
+      return;
+    }
+
+    state.scopeText = result.text;
+    state.scopeLabel = result.label || '';
+    els.scopeHint.classList.remove('error');
+    els.scopeBadge.classList.remove('error');
+    if (!result.label) {
+      const maxChars = Math.min(state.text.length, CONFIG.chunkSize * CONFIG.maxChunks);
+      els.scopeBadge.textContent = '全文';
+      els.scopeHint.textContent = '未限定范围：最多发送约 ' + maxChars.toLocaleString() +
+        ' 字符（' + CONFIG.maxChunks + ' 段上限）。填写页码或关键词可以进一步节省 token。';
+      els.scopeHint.title = els.scopeHint.textContent;
+      return;
+    }
+
+    const original = state.text.length || 1;
+    const saved = Math.max(0, Math.round((1 - result.chars / original) * 100));
+    els.scopeBadge.textContent = result.label.length > 20 ? '已限定范围' : result.label;
+    els.scopeHint.textContent = '本次只发送' + result.label + '，约 ' +
+      result.chars.toLocaleString() + ' 字符；原文 ' + original.toLocaleString() +
+      ' 字符，省约 ' + saved + '%。';
+    els.scopeHint.title = els.scopeHint.textContent;
   }
 
   /* ---------------- 文本切段 ---------------- */
@@ -1562,15 +1990,16 @@
     ].join('\n');
   }
 
-  function buildUserPrompt(chunk, index, total, sourceName) {
-    return [
+  function buildUserPrompt(chunk, index, total, sourceName, scopeLabel) {
+    const lines = [
       '材料名称：' + (sourceName || '未命名资料'),
-      '这是材料的第 ' + (index + 1) + ' / ' + total + ' 部分。请只根据这一部分撰写教学内容，不要与其他部分重复。',
-      '',
-      '<<< 材料开始 >>>',
-      chunk,
-      '<<< 材料结束 >>>'
-    ].join('\n');
+      '这是材料的第 ' + (index + 1) + ' / ' + total + ' 部分。请只根据这一部分撰写教学内容，不要与其他部分重复。'
+    ];
+    if (scopeLabel) {
+      lines.push('本次材料范围：' + scopeLabel + '。如果内容不连续，请只讲解出现的部分，不要补写范围外的内容。');
+    }
+    lines.push('', '<<< 材料开始 >>>', chunk, '<<< 材料结束 >>>');
+    return lines.join('\n');
   }
 
   /* ---------------- 解析模型返回的 JSON ---------------- */
@@ -1758,6 +2187,15 @@
       return;
     }
 
+    const scope = getScopeSelection();
+    if (scope.error) {
+      setStatus(scope.error, false, true);
+      toast(scope.error, 5600);
+      return;
+    }
+    state.scopeLabel = scope.label || '';
+    state.scopeText = scope.text;
+
     const requirements = readFormatPrompt();
     state.lessonRequirements = requirements;
     const lessonSystemPrompt = buildLessonSystemPrompt(requirements);
@@ -1775,7 +2213,7 @@
     showLoadingCard('正在整理材料…', 4);
 
     try {
-      let chunks = chunkText(state.text, CONFIG.chunkSize);
+      let chunks = chunkText(scope.text, CONFIG.chunkSize);
       const totalChunks = chunks.length;
       chunks = chunks.slice(0, CONFIG.maxChunks);
 
@@ -1790,7 +2228,7 @@
         const reply = await callChat(
           settings,
           lessonSystemPrompt,
-          buildUserPrompt(chunks[i], i, chunks.length, state.sourceLabel)
+          buildUserPrompt(chunks[i], i, chunks.length, state.sourceLabel, scope.label)
         );
         const data = parseLessonJson(reply.content);
         if (!data) {
@@ -1839,6 +2277,9 @@
     els.startBtn.disabled = busy || !state.text;
     els.fileInput.disabled = busy;
     els.demoBtn.disabled = busy;
+    [els.scopeChapter, els.scopeStart, els.scopeEnd, els.scopeKeyword].forEach((input) => {
+      input.disabled = busy;
+    });
     els.dropZone.classList.toggle('disabled', busy);
     if (busy) els.backBtn.hidden = true;
   }
@@ -2251,6 +2692,7 @@
     metaParts.push(lesson.sections.length + ' 个小节');
     metaParts.push(state.registry.size + ' 个术语');
     if (state.lessonRequirements) metaParts.push('自定义格式');
+    if (state.scopeLabel) metaParts.push('范围：' + state.scopeLabel);
     meta.textContent = metaParts.join(' · ');
     header.appendChild(meta);
 
@@ -3160,11 +3602,15 @@
     }
 
     if (state.text) {
-      const sourceExcerpt = truncateText(state.text, 6000);
+      const qaSource = state.scopeText || state.text;
+      const sourceExcerpt = truncateText(qaSource, 6000);
       parts.push(
-        '【原始资料节选】\n' + sourceExcerpt +
-        (state.text.length > 6000 ? '\n……（节选结束）' : '')
+        '【原始资料节选' + (state.scopeText ? '（按当前学习范围筛选）' : '') + '】\n' + sourceExcerpt +
+        (qaSource.length > 6000 ? '\n……（节选结束）' : '')
       );
+    }
+    if (state.scopeLabel) {
+      parts.push('【本次学习范围】\n' + state.scopeLabel);
     }
 
     if (!parts.length) parts.push('学生还没有上传学习资料。');
@@ -3303,6 +3749,8 @@
     const lesson = normalizeLesson(DEMO_LESSON);
     state.lesson = lesson;
     state.lessonRequirements = '';
+    state.scopeLabel = '';
+    state.scopeText = '';
     state.sourceLabel = '演示课程 · Whale Tutor';
     els.welcome.hidden = true;
     els.lesson.hidden = false;

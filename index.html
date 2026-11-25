@@ -120,6 +120,34 @@
             </div>
             <span class="composer-note">英文主体 + 中文翻译不变 · 留空使用默认格式</span>
           </div>
+          <div id="scopePanel" class="composer-scope" hidden>
+            <div class="composer-scope-head">
+              <span class="scope-title">学习范围</span>
+              <span id="scopeBadge" class="scope-badge">全文</span>
+              <p id="scopeHint" class="scope-hint">留空则阅读全文；填写页码或关键词后，只把对应部分发给模型。</p>
+            </div>
+            <div class="composer-scope-controls">
+              <div id="scopePageFields" class="scope-page-fields" hidden>
+                <label id="scopeChapterField" class="scope-field" hidden>
+                  <span>目录</span>
+                  <select id="scopeChapter"></select>
+                </label>
+                <label class="scope-field">
+                  <span id="scopeStartLabel">起始页</span>
+                  <input id="scopeStart" type="number" min="1" step="1" inputmode="numeric" placeholder="1" />
+                </label>
+                <span class="scope-dash">–</span>
+                <label class="scope-field">
+                  <span id="scopeEndLabel">结束页</span>
+                  <input id="scopeEnd" type="number" min="1" step="1" inputmode="numeric" placeholder="1" />
+                </label>
+              </div>
+              <label class="scope-field scope-keyword">
+                <span>关键词</span>
+                <input id="scopeKeyword" type="text" autocomplete="off" spellcheck="false" maxlength="80" placeholder="例如：分数计算、复数、统计" />
+              </label>
+            </div>
+          </div>
           <div class="composer-main">
             <textarea id="formatPrompt" rows="2" maxlength="1200" aria-label="课程要求" placeholder="第一次生成前，告诉 AI 你想要的格式，例如：分点讲解；用表格对比；最后出 3 道自测题……"></textarea>
             <div class="composer-action">
