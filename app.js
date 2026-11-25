@@ -17,7 +17,8 @@
     chatTimeoutMs: 180000,
     maxOcrImages: 20,          // 每个文件最多识别多少张图片
     maxOcrPdfPages: 12,        // 扫描版 PDF 最多 OCR 多少页
-    scopeCharBudget: 12000     // 关键词筛选时最多发送多少字符
+    scopeCharBudget: 12000,    // 关键词筛选时最多发送多少字符
+    chatRetrievalBudget: 6000  // 答疑时按问题从原文自动检索多少字符
   };
 
   const PRESETS = {
@@ -3533,13 +3534,13 @@
       budget -= item.content.length;
     }
     return [
-      { role: 'system', content: buildChatSystemPrompt() },
+      { role: 'system', content: buildChatSystemPrompt(question) },
       ...selected,
       { role: 'user', content: question }
     ];
   }
 
-  function buildChatSystemPrompt() {
+  function buildChatSystemPrompt(question) {
     const languageRule = state.chatLang === 'bilingual'
       ? '用英文作为主体回答，每个英文段落后附上对应的中文翻译；关键术语保持中英对照。'
       : '用简体中文回答；学术术语第一次出现时保留英文原词，并在括号中给出中文解释。';
@@ -3555,13 +3556,29 @@
       '4. 优先依据资料回答；如果资料里没有直接讲到，先说明“资料里没有直接讲到”，再用通用知识补充。',
       '5. 不要编造资料中的页码、数据或引用；不确定时就说不确定。',
       '6. 与资料无关的问题也可以正常回答。',
+      '7. 如果问题涉及当前学习范围之外的内容，而【按问题自动检索的原文段落】提供了相关内容，请先说明“这部分不在当前学习范围，但原文里能找到相关说明”，再依据它回答。',
+      '8. 引用页码时，只能使用资料或检索段落中明确出现的页码标记。',
       '',
       '【当前资料】',
-      buildTutorContext()
+      buildTutorContext(question)
     ].join('\n');
   }
 
-  function buildTutorContext() {
+  function buildFullSourceForRetrieval() {
+    if (state.docKind === 'pdf' && state.pdfPages.length) {
+      return state.pdfPages
+        .map((text, index) => '[PDF 第 ' + (index + 1) + ' 页]\n' + (text || ''))
+        .join('\n\n');
+    }
+    if (state.docKind === 'pptx' && state.slideTexts.length) {
+      return state.slideTexts
+        .map((text, index) => text || ('[Slide ' + (index + 1) + ']'))
+        .join('\n\n');
+    }
+    return state.text;
+  }
+
+  function buildTutorContext(question) {
     const parts = [];
     if (state.sourceLabel) parts.push('资料名称：' + state.sourceLabel);
     if (state.lessonRequirements) {
@@ -3601,16 +3618,36 @@
       parts.push('【术语表】\n' + termLines.join('\n'));
     }
 
+    const excerptLimit = state.scopeText ? 4000 : 6000;
     if (state.text) {
       const qaSource = state.scopeText || state.text;
-      const sourceExcerpt = truncateText(qaSource, 6000);
+      const sourceExcerpt = truncateText(qaSource, excerptLimit);
       parts.push(
         '【原始资料节选' + (state.scopeText ? '（按当前学习范围筛选）' : '') + '】\n' + sourceExcerpt +
-        (qaSource.length > 6000 ? '\n……（节选结束）' : '')
+        (qaSource.length > excerptLimit ? '\n……（节选结束）' : '')
       );
     }
     if (state.scopeLabel) {
       parts.push('【本次学习范围】\n' + state.scopeLabel);
+    }
+
+    // 学习范围之外的问题：用问题关键词在全文里本地检索相关段落，不额外调用模型
+    const questionText = String(question || '').trim();
+    const hasOutOfScopeContent = state.scopeText
+      ? state.text.length > state.scopeText.length + 40
+      : state.text.length > excerptLimit;
+    if (questionText && state.text && hasOutOfScopeContent) {
+      const retrieved = selectRelevantText(
+        buildFullSourceForRetrieval(),
+        questionText,
+        CONFIG.chatRetrievalBudget
+      );
+      if (retrieved.text && !String(state.scopeText || '').includes(retrieved.text)) {
+        parts.push(
+          '【按问题自动检索的原文段落' + (state.scopeLabel ? '（可能超出当前学习范围）' : '') + '】\n' +
+          retrieved.text
+        );
+      }
     }
 
     if (!parts.length) parts.push('学生还没有上传学习资料。');
