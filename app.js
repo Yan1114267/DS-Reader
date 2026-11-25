@@ -1,5 +1,5 @@
 /* =========================================================
-   小肥鱼学伴 · Whale Tutor — app.js
+   大鲸鱼阅读 · Whale Tutor — app.js
    纯前端应用：文件只在浏览器本地解析，API Key 只存在浏览器里
    ========================================================= */
 (() => {
@@ -1745,7 +1745,7 @@
       const merged = { title: null, sections: [], terms: [] };
 
       for (let i = 0; i < chunks.length; i += 1) {
-        setStatus('🐳 小肥鱼正在备第 ' + (i + 1) + '/' + chunks.length + ' 段课…', true);
+        setStatus('🐳 大鲸鱼正在备第 ' + (i + 1) + '/' + chunks.length + ' 段课…', true);
         setLoadingProgress(
           Math.round(6 + (i / chunks.length) * 86),
           '第 ' + (i + 1) + ' / ' + chunks.length + ' 段 · 英文讲解 + 中文翻译'
@@ -1808,7 +1808,7 @@
     els.lesson.innerHTML =
       '<div class="loading-card">' +
         '<div class="loading-whale">🐳</div>' +
-        '<h3>小肥鱼正在备课…</h3>' +
+        '<h3>大鲸鱼正在备课…</h3>' +
         '<p class="loading-detail" id="loadingDetail"></p>' +
         '<div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>' +
         '<p class="loading-hint">英文讲解 + 中文翻译 · 术语自动标注</p>' +
@@ -2571,7 +2571,7 @@
     els.chatSend.classList.toggle('is-stop', streaming);
     els.chatInput.disabled = streaming;
     els.chatInput.placeholder = streaming
-      ? '小肥鱼正在回答…'
+      ? '大鲸鱼正在回答…'
       : '不懂就问，比如：这一节的重点是什么？';
     if (!streaming) autoGrowChatInput();
   }
@@ -2935,7 +2935,7 @@
 
     if (state.busy) {
       openChat();
-      appendChatNote('小肥鱼还在备课，等课程生成完再问哦～');
+      appendChatNote('大鲸鱼还在备课，等课程生成完再问哦～');
       return;
     }
 
@@ -2943,7 +2943,7 @@
     const problem = validateSettings(settings);
     if (problem) {
       openChat();
-      appendChatNote('先在左侧填好 API 设置，小肥鱼才能回答哦。');
+      appendChatNote('先在左侧填好 API 设置，大鲸鱼才能回答哦。');
       setStatus(problem, false, true);
       toast(problem, 4200);
       return;
@@ -3060,7 +3060,7 @@
       : '用简体中文回答；学术术语第一次出现时保留英文原词，并在括号中给出中文解释。';
 
     return [
-      '你是“小肥鱼”，一位温柔、耐心、严谨的双语学习助教，正在陪学生阅读下面的学习资料，并随时回答学生的问题。',
+      '你是“大鲸鱼”，一位温柔、耐心、严谨的双语学习助教，正在陪学生阅读下面的学习资料，并随时回答学生的问题。',
       '',
       '【回答语言】' + languageRule,
       '【回答方式】',
