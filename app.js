@@ -18,7 +18,8 @@
     maxOcrImages: 20,          // 每个文件最多识别多少张图片
     maxOcrPdfPages: 12,        // 扫描版 PDF 最多 OCR 多少页
     scopeCharBudget: 12000,    // 关键词筛选时最多发送多少字符
-    chatRetrievalBudget: 6000  // 答疑时按问题从原文自动检索多少字符
+    chatRetrievalBudget: 6000, // 答疑时按问题从原文自动检索多少字符
+    pageByPageGroup: 6          // 本地逐页模式每次讲解多少页
   };
 
   const PRESETS = {
@@ -40,7 +41,46 @@
     { label: '先总后分', text: '先用 3 句话总结全篇，再分节展开；最后用一张要点清单收尾。' }
   ];
 
-  const SYSTEM_PROMPT = `你是一位温柔、耐心又严谨的双语讲师，负责根据学生上传的课件、论文或讲义片段，写出一节循序渐进的微型课程。
+  const DETAIL_KEY = 'whale-tutor-detail-level-v1';
+  const DETAIL_LEVELS = [
+    {
+      name: '最概括',
+      short: '只保留核心结论，尽量精简。',
+      style: '用尽量精炼的语言，只保留最核心的结论与最少必要解释；省略例子、细节和重复内容，输出应显著短于原文。',
+      fidelity: '可以大幅概括和改写，不要求保留原文措辞。',
+      maxTokens: 4096
+    },
+    {
+      name: '概括',
+      short: '讲清主要概念，省略次要细节。',
+      style: '简明讲解主要概念和逻辑，保留关键结论和必要例子，省略次要细节。',
+      fidelity: '可以概括改写，但要保留关键术语和结论。',
+      maxTokens: 6144
+    },
+    {
+      name: '适中',
+      short: '完整讲解核心内容，篇幅自然展开。',
+      style: '按正常课程节奏完整讲解核心概念、逻辑与必要例子，篇幅由材料内容自然决定，不使用固定词数上限。',
+      fidelity: '尽量使用原文关键词和术语；解释可以改写，但不要遗漏重要信息。',
+      maxTokens: 8192
+    },
+    {
+      name: '详细',
+      short: '详细展开公式、步骤、例子和上下文。',
+      style: '较完整地展开每一节，保留公式、数据、步骤、例子、注意事项和上下文；篇幅可以明显长于普通课程，不要为了简洁而压缩内容。',
+      fidelity: '尽量保留原文的措辞、术语、公式和关键表述，可以直接引用原文。',
+      maxTokens: 16384
+    },
+    {
+      name: '最细节',
+      short: '不限篇幅，逐页完整覆盖，尽量保留原文；PDF 在 DeepSeek 下会上传原文件读图。',
+      style: '不限制输出长度；逐页或逐节尽可能完整地覆盖所有内容，包括图表、公式、步骤、例子、注释和细节，不要省略。',
+      fidelity: '最大程度贴合原文：保留原文的措辞、术语、数据、公式、结构和顺序，可以直接引用或照抄原文。',
+      maxTokens: 65536
+    }
+  ];
+
+  const SYSTEM_PROMPT = `你是一位温柔、耐心又严谨的双语讲师，负责根据学生上传的课件、论文或讲义片段，写出一节循序渐进的课程。
 
 【输出格式】必须输出一个 JSON 对象，不要输出 JSON 以外的任何文字，不要使用 markdown 代码块。结构如下：
 {
@@ -59,10 +99,10 @@
 }
 
 【写作要求】
-1. 英文是主体：像老师面对面讲课一样，解释材料中的核心概念、逻辑与例子；由浅入深，英文自然流畅，适合大学生阅读。每个英文段落 60–140 词，每个英文段落后面都必须有准确、通顺的中文翻译。
-2. 每次生成的部分，英文教学总量控制在 400–700 词，选取最重要的内容，不要逐字照抄原文。
+1. 英文是主体：像老师面对面讲课一样，解释材料中的核心概念、逻辑与例子；由浅入深，英文自然流畅，适合大学生阅读。每个英文段落后面都必须有准确、通顺的中文翻译。段落长度和总篇幅由学生选择的讲解粒度决定，不使用固定词数。
+2. 按学生选择的讲解粒度处理内容：该概括时提炼重点，该详细时保留公式、数据、实验步骤、例子和图表信息；不要为了缩短篇幅而删除关键信息。详细与最细节粒度下可以引用、甚至直接保留原文的关键表述。
 3. 如果材料包含公式、数据或实验步骤，用文字解释它们的含义；不要编造材料中没有的事实。
-4. terms 只收录材料中真实出现的学术专有名词或首次定义的新概念，最多 12 个。term 必须是英文材料中按原样出现的形式（大小写一致，不要改写成复数或别的拼写），不要收录 the、data 这类普通词。
+4. terms 只收录材料中真实出现的学术专有名词或首次定义的新概念，最多 16 个。term 必须是英文材料中按原样出现的形式（大小写一致，不要改写成复数或别的拼写），不要收录 the、data 这类普通词。
 5. zh 是该术语在材料语境下最标准的中文译名；definition_zh 是一句面向学生的中文解释；definition_en 是一句简洁的英文定义。
 6. 不要在 JSON 之外输出任何文字、道歉或说明。
 7. 讲解段落内部可以使用轻量 Markdown 排版：**加粗**、*斜体*、反引号包裹的行内代码、- 项目符号、1. 编号列表、Markdown 表格（表头下一行用 | --- |）。前端会渲染这些格式；表格请放在 "en" 字段中，并在 "zh" 字段给出中文表格或对应翻译。
@@ -192,6 +232,9 @@
     scopeEndLabel: $('scopeEndLabel'),
     scopeKeyword: $('scopeKeyword'),
     scopeHint: $('scopeHint'),
+    detailLevel: $('detailLevel'),
+    detailLevelName: $('detailLevelName'),
+    detailLevelHint: $('detailLevelHint'),
     startBtn: $('startBtn'),
     status: $('status'),
     statusSpinner: $('statusSpinner'),
@@ -251,7 +294,10 @@
     slideTexts: [],
     slideCount: 0,
     scopeLabel: '',
-    scopeText: ''
+    scopeText: '',
+    pageByPageMode: false,
+    nativePdf: { key: '', fileId: '', failed: false },
+    pdfDoc: null
   };
 
   let activeTermEl = null;
@@ -264,7 +310,9 @@
   function init() {
     loadSettings();
     loadChatLanguage();
+    loadDetailLevel();
     bindEvents();
+    resetScopePanel();
     resetChat();
     setStatus('先填好 API 设置，再上传一份资料吧～', false);
     if (location.hash === '#demo') loadDemo();
@@ -344,6 +392,10 @@
     els.scopeStart.addEventListener('input', handleScopeRangeInput);
     els.scopeEnd.addEventListener('input', handleScopeRangeInput);
     els.scopeKeyword.addEventListener('input', scheduleScopeHint);
+    els.detailLevel.addEventListener('input', () => {
+      persistDetailLevel();
+      updateDetailLevelUI();
+    });
 
     ['dragenter', 'dragover'].forEach((type) => {
       els.dropZone.addEventListener(type, (event) => {
@@ -897,7 +949,10 @@
     state.slideCount = 0;
     state.scopeLabel = '';
     state.scopeText = '';
-    hideScopePanel();
+    state.pageByPageMode = false;
+    state.nativePdf = { key: '', fileId: '', failed: false };
+    closePdfDoc();
+    resetScopePanel();
     els.startBtn.disabled = true;
     showFileCard(file, '正在解析…');
 
@@ -944,7 +999,10 @@
       state.slideCount = 0;
       state.scopeLabel = '';
       state.scopeText = '';
-      hideScopePanel();
+      state.pageByPageMode = false;
+      state.nativePdf = { key: '', fileId: '', failed: false };
+      closePdfDoc();
+      resetScopePanel();
       showFileCard(file, '解析失败');
       setStatus(err.message || '解析失败，请换一个文件试试。', false, true);
       toast('文件解析失败：' + (err.message || '未知错误'), 6000);
@@ -1248,6 +1306,17 @@
     return out;
   }
 
+  function closePdfDoc() {
+    if (state.pdfDoc && typeof state.pdfDoc.destroy === 'function') {
+      try {
+        state.pdfDoc.destroy();
+      } catch (err) {
+        /* 忽略释放失败 */
+      }
+    }
+    state.pdfDoc = null;
+  }
+
   async function extractPdf(file, vision) {
     await ensurePdfWorker();
     if (!window.pdfjsLib) {
@@ -1255,6 +1324,7 @@
     }
     const data = new Uint8Array(await file.arrayBuffer());
     const pdf = await pdfjsLib.getDocument({ data }).promise;
+    state.pdfDoc = pdf;
     state.pageCount = pdf.numPages;
     const pages = [];
     const ocrProblem = vision.enabled ? visionConfigProblem(vision) : '';
@@ -1457,16 +1527,60 @@
     '关于', '对于', '通过', '使用', '时候', '问题', '内容'
   ]);
 
-  function hideScopePanel() {
-    els.scopePanel.hidden = true;
+  function resetScopePanel() {
+    els.scopePanel.hidden = false;
     els.scopeChapter.textContent = '';
     els.scopeStart.value = '';
     els.scopeEnd.value = '';
     els.scopeKeyword.value = '';
-    els.scopeHint.textContent = '留空则阅读全文；填写页码或关键词后，只把对应部分发给模型。';
+    els.scopePageFields.hidden = true;
+    els.scopeChapterField.hidden = true;
+    els.scopeHint.textContent = '上传资料后可以按目录、页码或关键词限定讲解范围。';
     els.scopeHint.classList.remove('error');
-    els.scopeBadge.textContent = '全文';
+    els.scopeBadge.textContent = '未上传';
     els.scopeBadge.classList.remove('error');
+    updateScopeAvailability();
+  }
+
+  function updateScopeAvailability() {
+    const disabled = state.busy || !state.text;
+    [els.scopeChapter, els.scopeStart, els.scopeEnd, els.scopeKeyword].forEach((input) => {
+      input.disabled = disabled;
+    });
+  }
+
+  function getDetailLevel() {
+    const value = Number(els.detailLevel.value);
+    if (!Number.isFinite(value)) return 3;
+    return Math.max(1, Math.min(5, Math.round(value)));
+  }
+
+  function updateDetailLevelUI() {
+    const level = getDetailLevel();
+    const info = DETAIL_LEVELS[level - 1];
+    els.detailLevelName.textContent = info.name;
+    els.detailLevelHint.textContent = info.name + '：' + info.short;
+    els.detailLevelHint.title = els.detailLevelHint.textContent;
+    els.detailLevel.setAttribute('aria-valuetext', info.name + '，' + info.short);
+  }
+
+  function loadDetailLevel() {
+    let saved = 3;
+    try {
+      saved = Number(localStorage.getItem(DETAIL_KEY)) || 3;
+    } catch (err) {
+      saved = 3;
+    }
+    els.detailLevel.value = String(Math.max(1, Math.min(5, Math.round(saved))));
+    updateDetailLevelUI();
+  }
+
+  function persistDetailLevel() {
+    try {
+      localStorage.setItem(DETAIL_KEY, String(getDetailLevel()));
+    } catch (err) {
+      /* 隐私模式下写不进去就算了 */
+    }
   }
 
   function setupScopePanel(ext) {
@@ -1487,6 +1601,7 @@
     els.scopeStartLabel.textContent = kind === 'pdf' ? '起始页' : '起始幻灯片';
     els.scopeEndLabel.textContent = kind === 'pdf' ? '结束页' : '结束幻灯片';
 
+    updateScopeAvailability();
     els.scopeChapter.textContent = '';
     if (kind === 'pdf' && state.pdfOutline.length) {
       const full = document.createElement('option');
@@ -1546,7 +1661,7 @@
     const hasEnd = Boolean(els.scopeEnd.value.trim());
     if (!hasStart && !hasEnd) {
       els.scopeChapter.value = '';
-    } else if (els.scopeChapter.value !== '' && els.scopeChapter.value !== 'custom') {
+    } else if (els.scopeChapter.value !== 'custom') {
       els.scopeChapter.value = 'custom';
     }
     updateScopeHint();
@@ -1840,6 +1955,59 @@
     return url + '/v1/chat/completions';
   }
 
+  function isDeepSeekSettings(settings) {
+    return /deepseek/i.test(String(settings && settings.model || '')) ||
+      /deepseek\.com/i.test(String(settings && settings.baseUrl || ''));
+  }
+
+  function buildFilesEndpoint(baseUrl) {
+    let url = String(baseUrl || '').trim().replace(/\/+$/, '');
+    if (/\/chat\/completions$/i.test(url)) {
+      url = url.replace(/\/chat\/completions$/i, '');
+    }
+    url = url.replace(/\/v\d+[a-z]*$/i, '');
+    return url + '/files';
+  }
+
+  async function uploadNativePdf(file, settings) {
+    if (!file || state.docKind !== 'pdf' || !isDeepSeekSettings(settings)) return '';
+    const cacheKey = [settings.baseUrl, settings.apiKey, file.name, file.size, file.lastModified].join('|');
+    if (state.nativePdf.fileId && state.nativePdf.key === cacheKey) {
+      return state.nativePdf.fileId;
+    }
+
+    const form = new FormData();
+    // DeepSeek 要求 purpose 字段排在 file 之前
+    form.append('purpose', 'rich_layout_recognition');
+    form.append('file', file, file.name);
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 180000);
+    try {
+      setStatus('正在把 PDF 上传给 DeepSeek 解析图片与版式…', true);
+      const headers = { Accept: 'application/json' };
+      if (settings.apiKey) headers.Authorization = 'Bearer ' + settings.apiKey;
+      const response = await fetch(buildFilesEndpoint(settings.baseUrl), {
+        method: 'POST',
+        headers,
+        body: form,
+        signal: controller.signal
+      });
+      if (!response.ok) throw await apiError(response);
+      const data = await response.json();
+      const fileId = data && (data.id || data.file_id);
+      if (!fileId) throw new Error('文件上传接口没有返回 file_id。');
+      state.nativePdf = { key: cacheKey, fileId, failed: false };
+      return fileId;
+    } catch (err) {
+      state.nativePdf = { key: cacheKey, fileId: '', failed: true };
+      console.error('原生 PDF 上传失败', err);
+      return '';
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
   async function apiError(response) {
     let raw = '';
     try {
@@ -1886,25 +2054,33 @@
     return '';
   }
 
-  async function callChat(settings, systemPrompt, userContent) {
+  async function callChat(settings, systemPrompt, userContent, options) {
     const url = buildEndpoint(settings.baseUrl);
     const headers = { 'Content-Type': 'application/json' };
     if (settings.apiKey) headers.Authorization = 'Bearer ' + settings.apiKey;
+
+    const fileId = options && options.fileId;
+    const requestMaxTokens = (options && options.maxTokens) || CONFIG.maxTokens;
+    const userMessage = fileId
+      ? [
+          { type: 'text', text: userContent },
+          { type: 'file', file_id: fileId }
+        ]
+      : userContent;
 
     const baseBody = {
       model: settings.model,
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: userContent }
+        { role: 'user', content: userMessage }
       ],
       temperature: CONFIG.temperature,
-      max_tokens: CONFIG.maxTokens
+      max_tokens: requestMaxTokens
     };
 
     // DeepSeek V4 / flash 默认开启思考模式，推理 token 会占用 max_tokens，
     // 很容易把 JSON 正文截断。这里主动关闭思考；其他服务商收不到这个字段。
-    const isDeepSeek = /deepseek/i.test(String(settings.model || '')) ||
-      /deepseek\.com/i.test(String(settings.baseUrl || ''));
+    const isDeepSeek = isDeepSeekSettings(settings);
     const variants = [];
     if (isDeepSeek) {
       variants.push({ thinking: true, json: true });
@@ -1912,7 +2088,7 @@
     }
     variants.push({ json: true });
     variants.push({ json: false });
-    if (CONFIG.maxTokens > 4096) {
+    if (requestMaxTokens > 4096) {
       // 兼容只允许较小输出额度的服务商
       variants.push({ json: false, maxTokens: 4096 });
     }
@@ -1977,18 +2153,28 @@
     }
   }
 
-  function buildLessonSystemPrompt(requirements) {
+  function buildLessonSystemPrompt(requirements, detailLevel) {
+    const levelIndex = Math.max(0, Math.min(DETAIL_LEVELS.length - 1, (detailLevel || 3) - 1));
+    const level = DETAIL_LEVELS[levelIndex];
     const custom = String(requirements || '').trim();
-    if (!custom) return SYSTEM_PROMPT;
-    return [
+    const lines = [
       SYSTEM_PROMPT,
       '',
-      '【学生这次指定的课程要求】',
-      '学生希望这节课按下面的要求呈现。请在不改变 JSON 输出结构、英文主体 + 中文翻译、术语规则的前提下尽量满足；这些要求可以覆盖上面的篇幅、分节和风格建议。',
-      '<<< 学生要求开始 >>>',
-      custom.slice(0, 2000),
-      '<<< 学生要求结束 >>>'
-    ].join('\n');
+      '【本次讲解粒度：' + level.name + '（第 ' + (levelIndex + 1) + ' / 5 级）】',
+      level.style,
+      level.fidelity
+    ];
+    if (custom) {
+      lines.push(
+        '',
+        '【学生这次指定的课程要求】',
+        '学生希望这节课按下面的要求呈现。请在不改变 JSON 输出结构、英文主体 + 中文翻译、术语规则的前提下尽量满足；这些要求可以覆盖上面的分节和风格建议。',
+        '<<< 学生要求开始 >>>',
+        custom.slice(0, 2000),
+        '<<< 学生要求结束 >>>'
+      );
+    }
+    return lines.join('\n');
   }
 
   function buildUserPrompt(chunk, index, total, sourceName, scopeLabel) {
@@ -2001,6 +2187,86 @@
     }
     lines.push('', '<<< 材料开始 >>>', chunk, '<<< 材料结束 >>>');
     return lines.join('\n');
+  }
+
+  function buildPageByPageSystemPrompt(requirements, totalPages, native, detailLevel) {
+    const levelIndex = Math.max(0, Math.min(DETAIL_LEVELS.length - 1, (detailLevel || 5) - 1));
+    const level = DETAIL_LEVELS[levelIndex];
+    const custom = String(requirements || '').trim();
+    const lines = [
+      '你是一位温柔、耐心又严谨的双语讲师，正在逐页讲解一份 PDF 课件。',
+      '',
+      '【输出格式】必须输出一个 JSON 对象，不要输出 JSON 以外的任何文字，不要使用 markdown 代码块。结构如下：',
+      '{"title":{"en":"课程标题","zh":"中文标题"},"sections":[{"heading":{"en":"Page N — 标题","zh":"第 N 页：标题"},"paragraphs":[{"en":"英文讲解","zh":"中文翻译"}]}],"terms":[{"term":"Term","zh":"术语","definition_en":"...","definition_zh":"..."}]}',
+      '',
+      '【本次讲解粒度：' + level.name + '（第 ' + (levelIndex + 1) + ' / 5 级）】',
+      '【逐页要求】',
+      '1. 文档共 ' + totalPages + ' 页。sections 必须按页码顺序一页一节，不能跳过、合并或只挑重点页；每一页都要有自己的 heading。',
+      '2. 每一页都要充分展开：' + level.style + ' 每页可以使用任意数量的段落，不设固定词数或段数上限。',
+      '3. ' + level.fidelity,
+      '4. ' + (native
+        ? 'PDF 已作为文件附加在用户消息中，请直接查看每一页的版式和图片；不要编造页面上不存在的内容。'
+        : '本次只提供部分页面的文字，页首有 [第 N 页] 标记；如果某页没有文字或看不到图片，就说明该页没有可提取的文字，不要编造图表细节。'),
+      '5. 不要写成整份文档的概括；每一节只讲对应那一页。',
+      '6. terms 只收录材料中真实出现的学术术语，最多 16 个；term 保留英文原样。',
+      '7. 不要在 JSON 之外输出任何文字、道歉或说明。'
+    ];
+    if (custom) {
+      lines.push(
+        '',
+        '【学生这次的额外要求】',
+        custom.slice(0, 2000),
+        '请在不改变逐页结构、JSON 格式和双语要求的前提下尽量满足。'
+      );
+    }
+    return lines.join('\n');
+  }
+
+  function buildPageByPageUserPrompt(group, totalPages, sourceName, native) {
+    if (native) {
+      return [
+        '资料名称：' + (sourceName || '未命名资料'),
+        '这份 PDF 共 ' + totalPages + ' 页，已作为文件提供。',
+        '请从第 1 页到第 ' + totalPages + ' 页逐页详细讲解，每一页单独一节，不能跳过任何一页。',
+        '<<< 逐页讲解开始 >>>'
+      ].join('\n');
+    }
+    return [
+      '资料名称：' + (sourceName || '未命名资料'),
+      '原文档共 ' + totalPages + ' 页；本次提供第 ' + group.start + '–' + group.end + ' 页。',
+      '请只讲解本次提供的页面，保持逐页一节，不要补写未提供的页面。',
+      '',
+      '<<< 材料开始 >>>',
+      group.text,
+      '<<< 材料结束 >>>'
+    ].join('\n');
+  }
+
+  function groupPdfPages(startPage, endPage, maxPages) {
+    const groups = [];
+    let current = null;
+    for (let page = startPage; page <= endPage; page += 1) {
+      const text = state.pdfPages[page - 1] || '';
+      const part = '[第 ' + page + ' 页]\n' + text;
+      if (current && (
+        page - current.start + 1 > maxPages ||
+        current.text.length + part.length > 7000
+      )) {
+        groups.push(current);
+        current = { start: page, end: page, text: part };
+      } else if (current) {
+        current.end = page;
+        current.text += '\n\n' + part;
+      } else {
+        current = { start: page, end: page, text: part };
+      }
+    }
+    if (current) groups.push(current);
+    return groups;
+  }
+
+  function mentionsPageByPage(requirements) {
+    return /逐页|一页一页|每页|page\s*by\s*page/i.test(String(requirements || ''));
   }
 
   /* ---------------- 解析模型返回的 JSON ---------------- */
@@ -2199,7 +2465,24 @@
 
     const requirements = readFormatPrompt();
     state.lessonRequirements = requirements;
-    const lessonSystemPrompt = buildLessonSystemPrompt(requirements);
+    let detailLevel = getDetailLevel();
+    if (mentionsPageByPage(requirements) && detailLevel < 5) {
+      detailLevel = 5;
+      els.detailLevel.value = '5';
+      updateDetailLevelUI();
+      persistDetailLevel();
+      toast(
+        state.docKind === 'pdf'
+          ? '检测到「逐页」要求：已切到最细节；PDF 会上传给 DeepSeek 读取图片。'
+          : '检测到「逐页」要求：已切到最细节讲解。',
+        6200
+      );
+    }
+    const pageByPageRequested = state.docKind === 'pdf' && detailLevel === 5;
+    state.pageByPageMode = pageByPageRequested;
+    const scopeRange = pageByPageRequested ? (readScopeRange().range || null) : null;
+    const detailMaxTokens = DETAIL_LEVELS[detailLevel - 1].maxTokens;
+    const lessonSystemPrompt = buildLessonSystemPrompt(requirements, detailLevel);
 
     if (state.chatStreaming) abortChat();
     closeChat();
@@ -2213,35 +2496,137 @@
     els.startBtn.textContent = '备课中…';
     showLoadingCard('正在整理材料…', 4);
 
+    let normalTotalChunks = 0;
+
     try {
-      let chunks = chunkText(scope.text, CONFIG.chunkSize);
-      const totalChunks = chunks.length;
-      chunks = chunks.slice(0, CONFIG.maxChunks);
-
       const merged = { title: null, sections: [], terms: [] };
+      let usedPageByPage = pageByPageRequested;
 
-      for (let i = 0; i < chunks.length; i += 1) {
-        setStatus('🐳 大鲸鱼正在备第 ' + (i + 1) + '/' + chunks.length + ' 段课…', true);
-        setLoadingProgress(
-          Math.round(6 + (i / chunks.length) * 86),
-          '第 ' + (i + 1) + ' / ' + chunks.length + ' 段 · 英文讲解 + 中文翻译'
-        );
-        const reply = await callChat(
-          settings,
-          lessonSystemPrompt,
-          buildUserPrompt(chunks[i], i, chunks.length, state.sourceLabel, scope.label)
-        );
-        const data = parseLessonJson(reply.content);
-        if (!data) {
-          const preview = String(reply.content || '').replace(/\s+/g, ' ').trim().slice(0, 180);
-          throw new Error(
-            '第 ' + (i + 1) + ' 段返回的内容不是有效 JSON（finish_reason=' +
-            (reply.finishReason || '未知') + '）。' +
-            (preview ? '返回开头：' + preview + ' ' : '') +
-            '可以再试一次，或换一个更擅长 JSON 输出的模型。'
-          );
+      if (usedPageByPage && scope.label && !scopeRange) {
+        usedPageByPage = false;
+        state.pageByPageMode = false;
+        toast('当前是关键词范围，无法确定页码，改用普通分段讲解。', 5200);
+      }
+
+      if (usedPageByPage) {
+        if (scope.label) {
+          toast('学习范围模式按本地文字逐页讲解，原生 PDF 图片不参与；清空范围可读取原图。', 6200);
         }
-        mergeLessonData(merged, data);
+        const nativeAllowed = !scope.label && isDeepSeekSettings(settings);
+        let nativeFileId = '';
+
+        if (nativeAllowed) {
+          nativeFileId = await uploadNativePdf(state.file, settings);
+          if (!nativeFileId) {
+            toast('DeepSeek 原生 PDF 解析失败，改用本地文字逐页讲解。', 6200);
+          }
+        }
+
+        if (nativeFileId) {
+          setStatus('🐳 大鲸鱼正在逐页阅读 PDF 的图片与版式…', true);
+          setLoadingProgress(24, '原生 PDF · 共 ' + state.pageCount + ' 页');
+          try {
+            const pageSystemPrompt = buildPageByPageSystemPrompt(
+              requirements,
+              state.pageCount,
+              true,
+              detailLevel
+            );
+            const reply = await callChat(
+              settings,
+              pageSystemPrompt,
+              buildPageByPageUserPrompt(
+                { start: 1, end: state.pageCount, text: '' },
+                state.pageCount,
+                state.sourceLabel,
+                true
+              ),
+              { fileId: nativeFileId, maxTokens: detailMaxTokens }
+            );
+            const data = parseLessonJson(reply.content);
+            if (!data || !Array.isArray(data.sections) || !data.sections.length) {
+              const preview = String(reply.content || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+              throw new Error(
+                '原生 PDF 逐页返回的内容不是有效 JSON 或没有页面小节（finish_reason=' +
+                (reply.finishReason || '未知') + '）。' +
+                (preview ? '返回开头：' + preview + ' ' : '')
+              );
+            }
+            mergeLessonData(merged, data);
+          } catch (err) {
+            console.error('原生 PDF 逐页失败，回退本地文字', err);
+            toast('原生 PDF 逐页讲解失败，改用本地文字继续。', 6500);
+            nativeFileId = '';
+            merged.title = null;
+            merged.sections = [];
+            merged.terms = [];
+          }
+        }
+
+        if (!nativeFileId) {
+          const startPage = scopeRange ? scopeRange.start : 1;
+          const endPage = scopeRange ? scopeRange.end : state.pageCount;
+          const groups = groupPdfPages(startPage, endPage, CONFIG.pageByPageGroup);
+          const pageSystemPrompt = buildPageByPageSystemPrompt(
+            requirements,
+            state.pageCount,
+            false,
+            detailLevel
+          );
+          for (let i = 0; i < groups.length; i += 1) {
+            const group = groups[i];
+            setStatus('🐳 大鲸鱼正在讲第 ' + group.start + '–' + group.end + ' 页…', true);
+            setLoadingProgress(
+              Math.round(6 + (i / groups.length) * 86),
+              '第 ' + group.start + '–' + group.end + ' 页 / 共 ' + state.pageCount + ' 页'
+            );
+            const reply = await callChat(
+              settings,
+              pageSystemPrompt,
+              buildPageByPageUserPrompt(group, state.pageCount, state.sourceLabel, false),
+              { maxTokens: detailMaxTokens }
+            );
+            const data = parseLessonJson(reply.content);
+            if (!data) {
+              const preview = String(reply.content || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+              throw new Error(
+                '第 ' + group.start + '–' + group.end + ' 页返回的内容不是有效 JSON（finish_reason=' +
+                (reply.finishReason || '未知') + '）。' +
+                (preview ? '返回开头：' + preview + ' ' : '')
+              );
+            }
+            mergeLessonData(merged, data);
+          }
+        }
+      } else {
+        let chunks = chunkText(scope.text, CONFIG.chunkSize);
+        normalTotalChunks = chunks.length;
+        chunks = chunks.slice(0, CONFIG.maxChunks);
+
+        for (let i = 0; i < chunks.length; i += 1) {
+          setStatus('🐳 大鲸鱼正在备第 ' + (i + 1) + '/' + chunks.length + ' 段课…', true);
+          setLoadingProgress(
+            Math.round(6 + (i / chunks.length) * 86),
+            '第 ' + (i + 1) + ' / ' + chunks.length + ' 段 · 英文讲解 + 中文翻译'
+          );
+          const reply = await callChat(
+            settings,
+            lessonSystemPrompt,
+            buildUserPrompt(chunks[i], i, chunks.length, state.sourceLabel, scope.label),
+            { maxTokens: detailMaxTokens }
+          );
+          const data = parseLessonJson(reply.content);
+          if (!data) {
+            const preview = String(reply.content || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+            throw new Error(
+              '第 ' + (i + 1) + ' 段返回的内容不是有效 JSON（finish_reason=' +
+              (reply.finishReason || '未知') + '）。' +
+              (preview ? '返回开头：' + preview + ' ' : '') +
+              '可以再试一次，或换一个更擅长 JSON 输出的模型。'
+            );
+          }
+          mergeLessonData(merged, data);
+        }
       }
 
       const lesson = normalizeLesson(merged);
@@ -2254,7 +2639,7 @@
       resetChat();
       setStatus('✨ 备课完成，祝学习愉快～', false);
 
-      if (totalChunks > CONFIG.maxChunks) {
+      if (normalTotalChunks > CONFIG.maxChunks) {
         toast(
           '文档较长，本次只讲解了前 ' + CONFIG.maxChunks + ' 段（约 ' +
           Math.round((CONFIG.maxChunks * CONFIG.chunkSize) / 1000) + ' 千字符）。',
@@ -2278,9 +2663,8 @@
     els.startBtn.disabled = busy || !state.text;
     els.fileInput.disabled = busy;
     els.demoBtn.disabled = busy;
-    [els.scopeChapter, els.scopeStart, els.scopeEnd, els.scopeKeyword].forEach((input) => {
-      input.disabled = busy;
-    });
+    updateScopeAvailability();
+    els.detailLevel.disabled = busy;
     els.dropZone.classList.toggle('disabled', busy);
     if (busy) els.backBtn.hidden = true;
   }
@@ -2693,6 +3077,7 @@
     metaParts.push(lesson.sections.length + ' 个小节');
     metaParts.push(state.registry.size + ' 个术语');
     if (state.lessonRequirements) metaParts.push('自定义格式');
+    if (state.pageByPageMode) metaParts.push('逐页详细');
     if (state.scopeLabel) metaParts.push('范围：' + state.scopeLabel);
     meta.textContent = metaParts.join(' · ');
     header.appendChild(meta);
@@ -3450,7 +3835,7 @@
     state.chatStreaming = true;
     updateChatControls();
 
-    const requestMessages = buildChatRequestMessages(text);
+    const requestMessages = await buildChatRequestMessages(text);
     state.chatHistory.push({ role: 'user', content: text });
     trimChatHistory();
 
@@ -3524,7 +3909,31 @@
     }
   }
 
-  function buildChatRequestMessages(question) {
+  async function buildQuestionPageImages(question) {
+    if (state.docKind !== 'pdf' || !state.pdfDoc || !state.pdfPages.length) return [];
+    let pages = extractQuestionPageNumbers(question, state.pdfPages.length);
+    if (!pages.length && /图|曲线|坐标|横轴|纵轴|示意|照片|figure|image|diagram|chart|plot|axis/i.test(question)) {
+      const priorUser = [...state.chatHistory].reverse().find((item) => item.role === 'user');
+      if (priorUser) pages = extractQuestionPageNumbers(priorUser.content, state.pdfPages.length);
+    }
+    if (!pages.length) return [];
+
+    const images = [];
+    for (const pageNo of pages.slice(0, 2)) {
+      try {
+        const page = await state.pdfDoc.getPage(pageNo);
+        const dataUrl = await renderPdfPageToDataUrl(page);
+        if (dataUrl) {
+          images.push({ type: 'image_url', image_url: { url: dataUrl } });
+        }
+      } catch (err) {
+        console.warn('页面图片渲染失败：第 ' + pageNo + ' 页', err);
+      }
+    }
+    return images;
+  }
+
+  async function buildChatRequestMessages(question) {
     const selected = [];
     let budget = 6000;
     for (let i = state.chatHistory.length - 1; i >= 0 && selected.length < 12; i -= 1) {
@@ -3533,10 +3942,14 @@
       selected.unshift({ role: item.role, content: item.content });
       budget -= item.content.length;
     }
+    const images = await buildQuestionPageImages(question);
+    const userContent = images.length
+      ? [{ type: 'text', text: question }, ...images]
+      : question;
     return [
       { role: 'system', content: buildChatSystemPrompt(question) },
       ...selected,
-      { role: 'user', content: question }
+      { role: 'user', content: userContent }
     ];
   }
 
@@ -3558,6 +3971,8 @@
       '6. 与资料无关的问题也可以正常回答。',
       '7. 如果问题涉及当前学习范围之外的内容，而【按问题自动检索的原文段落】提供了相关内容，请先说明“这部分不在当前学习范围，但原文里能找到相关说明”，再依据它回答。',
       '8. 引用页码时，只能使用资料或检索段落中明确出现的页码标记。',
+      '9. 如果用户消息附带页面图片，请先辨认图中的坐标轴、曲线、标注、图例和文字，再结合原文回答；不要忽略图片。',
+      '10. 如果【问题指定页的原文】提供了后续页面的内容，请以它为准；不要因为课程讲义或节选只到前面几页，就回答资料里没有该页。',
       '',
       '【当前资料】',
       buildTutorContext(question)
@@ -3576,6 +3991,35 @@
         .join('\n\n');
     }
     return state.text;
+  }
+
+  function extractQuestionPageNumbers(question, maxPage) {
+    const text = String(question || '');
+    const found = new Set();
+    const patterns = [
+      /第\s*(\d{1,4})\s*页/g,
+      /(?:page|p\.?)\s*(\d{1,4})/gi,
+      /(\d{1,4})\s*(?:页|頁)/g
+    ];
+    patterns.forEach((pattern) => {
+      let match;
+      while ((match = pattern.exec(text))) {
+        const page = Number(match[1]);
+        if (page >= 1 && page <= maxPage) found.add(page);
+      }
+    });
+    return Array.from(found).sort((a, b) => a - b);
+  }
+
+  function buildRequestedPageExcerpt(question) {
+    if (state.docKind !== 'pdf' || !state.pdfPages.length) return '';
+    const pages = extractQuestionPageNumbers(question, state.pdfPages.length).slice(0, 3);
+    if (!pages.length) return '';
+    return pages.map((page) => {
+      const text = state.pdfPages[page - 1] || '';
+      return '[PDF 第 ' + page + ' 页]\n' +
+        (text || '（这一页没有可提取的文字，可能是图片页）');
+    }).join('\n\n');
   }
 
   function buildTutorContext(question) {
@@ -3618,12 +4062,13 @@
       parts.push('【术语表】\n' + termLines.join('\n'));
     }
 
-    const excerptLimit = state.scopeText ? 4000 : 6000;
+    const hasScope = Boolean(state.scopeLabel);
+    const excerptLimit = hasScope ? 4000 : 6000;
     if (state.text) {
-      const qaSource = state.scopeText || state.text;
+      const qaSource = hasScope ? (state.scopeText || state.text) : state.text;
       const sourceExcerpt = truncateText(qaSource, excerptLimit);
       parts.push(
-        '【原始资料节选' + (state.scopeText ? '（按当前学习范围筛选）' : '') + '】\n' + sourceExcerpt +
+        '【原始资料节选' + (hasScope ? '（按当前学习范围筛选）' : '') + '】\n' + sourceExcerpt +
         (qaSource.length > excerptLimit ? '\n……（节选结束）' : '')
       );
     }
@@ -3631,10 +4076,16 @@
       parts.push('【本次学习范围】\n' + state.scopeLabel);
     }
 
-    // 学习范围之外的问题：用问题关键词在全文里本地检索相关段落，不额外调用模型
+    // 问题明确提到页码时，直接把那一页的原文放进上下文，不依赖关键词命中
     const questionText = String(question || '').trim();
-    const hasOutOfScopeContent = state.scopeText
-      ? state.text.length > state.scopeText.length + 40
+    const requestedPageText = buildRequestedPageExcerpt(questionText);
+    if (requestedPageText) {
+      parts.push('【问题指定页的原文】\n' + truncateText(requestedPageText, 5000));
+    }
+
+    // 学习范围之外的问题：用问题关键词在全文里本地检索相关段落，不额外调用模型
+    const hasOutOfScopeContent = hasScope
+      ? state.text.length > (state.scopeText || '').length + 40
       : state.text.length > excerptLimit;
     if (questionText && state.text && hasOutOfScopeContent) {
       const retrieved = selectRelevantText(
@@ -3642,7 +4093,7 @@
         questionText,
         CONFIG.chatRetrievalBudget
       );
-      if (retrieved.text && !String(state.scopeText || '').includes(retrieved.text)) {
+      if (retrieved.text && !String(hasScope ? state.scopeText : '').includes(retrieved.text)) {
         parts.push(
           '【按问题自动检索的原文段落' + (state.scopeLabel ? '（可能超出当前学习范围）' : '') + '】\n' +
           retrieved.text
@@ -3660,23 +4111,50 @@
     return value.slice(0, limit).trimEnd() + '…';
   }
 
+  function stripQuestionImages(messages) {
+    return messages.map((message) => {
+      if (!Array.isArray(message.content)) return message;
+      const text = message.content
+        .filter((part) => part && part.type === 'text')
+        .map((part) => part.text || '')
+        .join('\n');
+      return Object.assign({}, message, { content: text });
+    });
+  }
+
   async function streamChatCompletion(settings, messages, onDelta, signal) {
     const url = buildEndpoint(settings.baseUrl);
     const headers = { 'Content-Type': 'application/json' };
     if (settings.apiKey) headers.Authorization = 'Bearer ' + settings.apiKey;
 
-    const response = await fetch(url, {
+    const hasImages = messages.some((message) =>
+      Array.isArray(message.content) &&
+      message.content.some((part) => part && part.type === 'image_url')
+    );
+    const payload = {
+      model: settings.model,
+      messages,
+      temperature: 0.35,
+      max_tokens: CONFIG.chatMaxTokens,
+      stream: true
+    };
+
+    let response = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        model: settings.model,
-        messages,
-        temperature: 0.35,
-        max_tokens: CONFIG.chatMaxTokens,
-        stream: true
-      }),
+      body: JSON.stringify(payload),
       signal
     });
+
+    if (response.status === 400 && hasImages) {
+      // 有的服务商/模型不支持图片，退回纯文字，保留页面原文与检索结果
+      response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(Object.assign({}, payload, { messages: stripQuestionImages(messages) })),
+        signal
+      });
+    }
 
     if (!response.ok) throw await apiError(response);
 
@@ -3788,6 +4266,7 @@
     state.lessonRequirements = '';
     state.scopeLabel = '';
     state.scopeText = '';
+    state.pageByPageMode = false;
     state.sourceLabel = '演示课程 · Whale Tutor';
     els.welcome.hidden = true;
     els.lesson.hidden = false;

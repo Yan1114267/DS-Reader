@@ -120,7 +120,8 @@
             </div>
             <span class="composer-note">英文主体 + 中文翻译不变 · 留空使用默认格式</span>
           </div>
-          <div id="scopePanel" class="composer-scope" hidden>
+          <div class="composer-toolbar">
+          <div id="scopePanel" class="composer-scope">
             <div class="composer-scope-head">
               <span class="scope-title">学习范围</span>
               <span id="scopeBadge" class="scope-badge">全文</span>
@@ -147,6 +148,18 @@
                 <input id="scopeKeyword" type="text" autocomplete="off" spellcheck="false" maxlength="80" placeholder="例如：分数计算、复数、统计" />
               </label>
             </div>
+          </div>
+          <div class="detail-level">
+            <div class="detail-level-head">
+              <span class="detail-level-title">讲解粒度</span>
+              <span id="detailLevelName" class="detail-level-name">适中</span>
+            </div>
+            <input id="detailLevel" class="detail-level-range" type="range" min="1" max="5" step="1" value="3" aria-label="讲解粒度：1 最概括，5 最细节" />
+            <div class="detail-level-scale" aria-hidden="true">
+              <span>最概括</span><span>概括</span><span>适中</span><span>详细</span><span>最细节</span>
+            </div>
+            <p id="detailLevelHint" class="detail-level-hint">适中：完整讲解核心内容，篇幅自然展开。</p>
+          </div>
           </div>
           <div class="composer-main">
             <textarea id="formatPrompt" rows="2" maxlength="1200" aria-label="课程要求" placeholder="第一次生成前，告诉 AI 你想要的格式，例如：分点讲解；用表格对比；最后出 3 道自测题……"></textarea>
